@@ -1,0 +1,10 @@
+[package]
+name = "bottle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bottle-orm = { path = "../bottle-orm" }
+tokio = { version = "1.49.0", "features" = ["full"] }
+dotenvy = "0.15.7"
+sqlx = "0.8.6"

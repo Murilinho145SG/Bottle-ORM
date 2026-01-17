@@ -1,0 +1,7 @@
+# rustfmt.toml
+
+edition = "2021"
+max_width = 120
+use_small_heuristics = "Max"
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"

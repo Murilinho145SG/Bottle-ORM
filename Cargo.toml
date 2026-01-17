@@ -1,0 +1,3 @@
+[workspace]
+members = ["bottle-orm", "bottle", "bottle-orm-macro"]
+resolver = "2"

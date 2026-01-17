@@ -1,0 +1,19 @@
+[package]
+name = "bottle-orm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bottle-orm-macro = { path = "../bottle-orm-macro" }
+sqlx = { version = "0.8.6", features = [
+	"runtime-tokio-native-tls",
+	"any",
+	"postgres",
+	"mysql",
+	"sqlite",
+	"chrono",
+] }
+futures = "0.3.31"
+chrono = { version = "0.4.43", features = ["serde"] }
+async-trait = "0.1.89"
+heck = "0.5.0"
