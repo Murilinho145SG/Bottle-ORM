@@ -167,7 +167,7 @@ impl Database {
     }
 }
 
-type FilterFn = Box<dyn for<'a> Fn(&mut sqlx::QueryBuilder<'a, Any>) + Send + Sync>;
+type FilterFn = Box<dyn Fn(&mut String, &mut AnyArguments<'_>, &Drivers, &mut usize) + Send + Sync>;
 
 pub struct QueryBuilder<'a, T> {
     db: &'a Database,
@@ -187,14 +187,23 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     where
         V: 'static + for<'q> sqlx::Encode<'q, Any> + sqlx::Type<Any> + Send + Sync + Clone,
     {
-        let clause: FilterFn = Box::new(move |qb| {
-            qb.push(" AND ");
-            qb.push("\"");
-            qb.push(col);
-            qb.push("\"");
-            qb.push(op);
-            qb.push(" ");
-            qb.push_bind(value.clone());
+        let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
+            query.push_str(" AND \"");
+            query.push_str(col);
+            query.push_str("\" ");
+            query.push_str(op);
+            query.push(' ');
+
+            match driver {
+                Drivers::Postgres => {
+                    query.push_str(&format!("${}", arg_counter));
+                    *arg_counter += 1;
+                }
+                _ => query.push('?'),
+            }
+            
+            use sqlx::Arguments;
+            args.add(value.clone());
         });
         self.where_clauses.push(clause);
         self
@@ -319,70 +328,98 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     }
 
     fn to_sql(&self) -> String {
-        let mut qb = sqlx::QueryBuilder::new("SELECT ");
+        let mut query = String::from("SELECT ");
         if self.select_columns.is_empty() {
-            qb.push("*");
+            query.push('*');
         } else {
-            qb.push(self.select_columns.join(", "));
+            query.push_str(&self.select_columns.join(", "));
         }
-        qb.push(" FROM \"");
-        qb.push(self.table_name.to_snake_case());
-        qb.push("\" WHERE 1=1");
-
+        query.push_str(" FROM \"");
+        query.push_str(&self.table_name.to_snake_case());
+        query.push_str("\" WHERE 1=1");
+        
+        // Note: to_sql cannot easily show bindings without context, 
+        // so we just run the clauses with a dummy args to build the string
+        // This is mainly for debug or non-bound usage if any.
+        let mut dummy_args = AnyArguments::default();
+        let mut dummy_counter = 1;
+        
         for clause in &self.where_clauses {
-            clause(&mut qb);
+            clause(&mut query, &mut dummy_args, &self.db.driver, &mut dummy_counter);
         }
 
-        qb.sql().into()
+        query
     }
 
     pub async fn scan<R>(self) -> Result<Vec<R>, sqlx::Error>
     where
         R: for<'r> FromRow<'r, AnyRow> + Send + Unpin,
     {
-        let mut qb = sqlx::QueryBuilder::new("SELECT ");
+        let mut query = String::from("SELECT ");
         if self.select_columns.is_empty() {
-            qb.push("*");
+            query.push('*');
         } else {
-            qb.push(self.select_columns.join(", "));
+            query.push_str(&self.select_columns.join(", "));
         }
-        qb.push(" FROM \"");
-        qb.push(self.table_name.to_snake_case());
-        qb.push("\" WHERE 1=1");
+        query.push_str(" FROM \"");
+        query.push_str(&self.table_name.to_snake_case());
+        query.push_str("\" WHERE 1=1");
+
+        let mut args = AnyArguments::default();
+        let mut arg_counter = 1;
 
         for clause in &self.where_clauses {
-            clause(&mut qb);
+            clause(&mut query, &mut args, &self.db.driver, &mut arg_counter);
         }
 
         if let Some(limit) = self.limit {
-            qb.push(" LIMIT ");
-            qb.push_bind(limit as i64);
+            query.push_str(" LIMIT ");
+            match self.db.driver {
+                 Drivers::Postgres => {
+                     query.push_str(&format!("${}", arg_counter));
+                     arg_counter += 1;
+                 }
+                 _ => query.push('?'),
+            }
+            use sqlx::Arguments;
+            args.add(limit as i64);
         }
 
         if let Some(offset) = self.offset {
-            qb.push(" OFFSET ");
-            qb.push_bind(offset as i64);
+            query.push_str(" OFFSET ");
+            match self.db.driver {
+                 Drivers::Postgres => {
+                     query.push_str(&format!("${}", arg_counter));
+                     arg_counter += 1;
+                 }
+                 _ => query.push('?'),
+            }
+            use sqlx::Arguments;
+            args.add(offset as i64);
         }
 
-        qb.build_query_as::<R>().fetch_all(&self.db.pool).await
+        sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(&self.db.pool).await
     }
 
     pub async fn first<R>(self) -> Result<R, sqlx::Error>
     where
         R: for<'r> FromRow<'r, AnyRow> + Send + Unpin,
     {
-        let mut qb = sqlx::QueryBuilder::new("SELECT ");
+        let mut query = String::from("SELECT ");
         if self.select_columns.is_empty() {
-            qb.push("*");
+            query.push('*');
         } else {
-            qb.push(self.select_columns.join(", "));
+            query.push_str(&self.select_columns.join(", "));
         }
-        qb.push(" FROM \"");
-        qb.push(self.table_name.to_snake_case());
-        qb.push("\" WHERE 1=1");
+        query.push_str(" FROM \"");
+        query.push_str(&self.table_name.to_snake_case());
+        query.push_str("\" WHERE 1=1");
+
+        let mut args = AnyArguments::default();
+        let mut arg_counter = 1;
 
         for clause in &self.where_clauses {
-            clause(&mut qb);
+            clause(&mut query, &mut args, &self.db.driver, &mut arg_counter);
         }
 
         let pk_column = T::columns()
@@ -391,17 +428,16 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
             .map(|c| c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case());
 
         if let Some(pk) = pk_column {
-            qb.push(" ORDER BY \"");
-            qb.push(pk);
-            qb.push("\" ASC");
+            query.push_str(" ORDER BY \"");
+            query.push_str(&pk);
+            query.push_str("\" ASC");
         }
 
-        qb.push(" LIMIT 1");
+        query.push_str(" LIMIT 1");
 
-        qb.build_query_as::<R>().fetch_one(&self.db.pool).await
+        sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(&self.db.pool).await
     }
 }
-
 type MigrationTask = Box<dyn Fn(Database) -> BoxFuture<'static, Result<(), sqlx::Error>> + Send + Sync>;
 
 pub struct Migrator<'a> {
