@@ -1,5 +1,9 @@
 # Bottle ORM
 
+[![Crates.io](https://img.shields.io/crates/v/bottle-orm.svg)](https://crates.io/crates/bottle-orm)
+[![Docs.rs](https://docs.rs/bottle-orm/badge.svg)](https://docs.rs/bottle-orm)
+[![License](https://img.shields.io/crates/l/bottle-orm.svg)](https://github.com/Murilinho145SG/bottle-orm/blob/main/LICENSE)
+
 **Bottle ORM** is a lightweight, async ORM for Rust built on top of [sqlx](https://github.com/launchbadge/sqlx). It is designed to be simple, efficient, and easy to use, providing a fluent Query Builder and automatic schema migrations.
 
 ## Features
@@ -7,7 +11,7 @@
 - **Async & Non-blocking**: Built on `tokio` and `sqlx`.
 - **Multi-Driver Support**: Compatible with PostgreSQL, MySQL, and SQLite (via `sqlx::Any`).
 - **Macro-based Models**: Define your schema using standard Rust structs with `#[derive(Model)]`.
-- **Fluent Query Builder**: Chainable methods for filtering, selecting, and pagination.
+- **Fluent Query Builder**: Chainable methods for filtering, selecting, pagination, and sorting.
 - **Auto-Migration**: Automatically creates tables and foreign key constraints based on your structs.
 
 ## Installation
@@ -16,12 +20,11 @@ Add `bottle-orm` to your `Cargo.toml`. You will also need `sqlx`, `tokio`, and `
 
 ```toml
 [dependencies]
-bottle-orm = { path = "path/to/bottle-orm" } # Or version from crates.io when available
+bottle-orm = "0.1.0"
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-native-tls", "any", "postgres", "sqlite", "mysql", "chrono"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
-dotenvy = "0.15"
 ```
 
 ## Quick Start
@@ -34,8 +37,9 @@ Use the `#[derive(Model)]` macro to define your database tables. You can use the
 use bottle_orm::Model;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 
-#[derive(Model, Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Model, Debug, Clone, Serialize, Deserialize, FromRow)]
 struct User {
     #[orm(primary_key)]
     id: i32,
@@ -46,7 +50,7 @@ struct User {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Model, Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Model, Debug, Clone, Serialize, Deserialize, FromRow)]
 struct Post {
     #[orm(primary_key)]
     id: i32,
@@ -68,8 +72,9 @@ use std::env;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load environment variables (DATABASE_URL)
-    dotenvy::dotenv().ok();
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    // dotenvy::dotenv().ok();
+    // let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = "sqlite::memory:"; // Example for SQLite
 
     // 1. Connect to the database
     let db = Database::connect(&database_url).await?;
@@ -113,9 +118,10 @@ let user: User = db.model::<User>()
 
 println!("Found user: {:?}", user);
 
-// Fetch multiple records with conditions
+// Fetch multiple records with conditions, order, and pagination
 let adults: Vec<User> = db.model::<User>()
     .filter("age", ">=", 18)
+    .order("age DESC")
     .limit(10)
     .scan()
     .await?;
@@ -144,4 +150,4 @@ Bottle ORM uses `sqlx::Any` to support multiple databases. The driver is detecte
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
