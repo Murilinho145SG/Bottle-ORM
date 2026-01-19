@@ -890,7 +890,6 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
             let _ = args.add(offset as i64);
         }
 
-        println!("{}", query);
         // Execute query and fetch all results
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(&self.db.pool).await
     }
@@ -980,8 +979,6 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
 
         // Always add LIMIT 1 for first() queries
         query.push_str(" LIMIT 1");
-
-        println!("{}", query);
 
         // Execute query and fetch exactly one result
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(&self.db.pool).await
