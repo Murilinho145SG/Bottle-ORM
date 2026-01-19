@@ -204,6 +204,8 @@ mod types;
 /// macro, including attribute parsing and code generation.
 mod derive_model;
 
+mod derive_anyrow;
+
 // ============================================================================
 // Procedural Macro Definitions
 // ============================================================================
@@ -298,4 +300,11 @@ pub fn model_derive(input: TokenStream) -> TokenStream {
 
     // Convert the generated code back into a TokenStream
     TokenStream::from(expanded)
+}
+
+#[proc_macro_derive(FromAnyRow)]
+pub fn any_derive(input: TokenStream) -> TokenStream {
+       let ast = parse_macro_input!(input as DeriveInput);
+       let expanded = derive_anyrow::expand(ast);
+       TokenStream::from(expanded)
 }

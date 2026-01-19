@@ -482,7 +482,8 @@ impl Database {
         // Build and execute CREATE TABLE statement
         let create_table_query =
             format!("CREATE TABLE IF NOT EXISTS \"{}\" ({})", table_name.to_snake_case(), column_defs.join(", "));
-
+        println!("{}", create_table_query);
+        
         sqlx::query(&create_table_query).execute(&self.pool).await?;
 
         // Create indexes

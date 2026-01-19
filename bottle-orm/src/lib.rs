@@ -57,6 +57,12 @@
 /// implementation of the `Model` trait for structs representing database tables.
 pub use bottle_orm_macro::Model;
 
+/// Re-export of the procedural macro for deriving `FromRow` for `AnyRow` and `AnyImpl`.
+///
+/// This macro facilitates scanning arbitrary query results (via `AnyRow`) into
+/// Rust structs, handling necessary type conversions (especially for temporal types).
+pub use bottle_orm_macro::FromAnyRow;
+
 // ============================================================================
 // Module Declarations
 // ============================================================================
@@ -72,6 +78,12 @@ pub mod database;
 /// Defines the `Model` trait that must be implemented by all ORM entities,
 /// and the `ColumnInfo` struct containing metadata about table columns.
 pub mod model;
+
+/// Support for mapping arbitrary `AnyRow` results to structs.
+///
+/// Defines traits and structures (`AnyImpl`, `AnyInfo`) that support the `FromAnyRow`
+/// derive macro, enabling flexible result mapping.
+pub mod any_struct;
 
 /// Fluent query builder for constructing SQL queries.
 ///
@@ -118,6 +130,12 @@ pub use database::Database;
 /// The `Model` trait defines the interface for ORM entities, while
 /// `ColumnInfo` contains metadata about individual table columns.
 pub use model::{ColumnInfo, Model};
+
+/// Re-export of `AnyImpl` and `AnyInfo` for dynamic row mapping.
+///
+/// `AnyImpl` is the trait implemented by structs that can be scanned from `AnyRow`,
+/// providing necessary column metadata via `AnyInfo`.
+pub use any_struct::{AnyImpl, AnyInfo};
 
 /// Re-export of the `QueryBuilder` for constructing and executing queries.
 ///

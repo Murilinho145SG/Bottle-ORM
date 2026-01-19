@@ -49,8 +49,8 @@
 
 use heck::ToSnakeCase;
 use sqlx::{
-    Any, Arguments, Encode, FromRow, Type,
     any::{AnyArguments, AnyRow},
+    Any, Arguments, Decode, Encode, FromRow, Type,
 };
 use std::marker::PhantomData;
 use uuid::Uuid;
@@ -60,11 +60,11 @@ use uuid::Uuid;
 // ============================================================================
 
 use crate::{
-    Error,
     database::{Database, Drivers},
     model::{ColumnInfo, Model},
-    temporal,
+    temporal::{self, is_temporal_type},
     value_binding::ValueBinder,
+    AnyImpl, Error,
 };
 
 // ============================================================================
@@ -439,7 +439,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     ///     .select("created_at")
     /// ```
     pub fn select(mut self, columns: &str) -> Self {
-        self.select_columns.push(columns.to_string());
+        self.select_columns.push(columns.to_string().to_snake_case());
         self
     }
 
@@ -753,6 +753,58 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         query
     }
 
+    /// Generates the list of column selection SQL arguments.
+    ///
+    /// This helper function constructs the column list for the SELECT statement.
+    /// It handles:
+    /// 1. Mapping specific columns if `select_columns` is set.
+    /// 2. Defaulting to all columns from the struct `R` if no columns are specified.
+    /// 3. applying `to_json(...)` casting for temporal types when using `AnyImpl` structs,
+    ///    ensuring compatibility with the `FromAnyRow` deserialization logic.
+    fn select_args_sql<R: AnyImpl>(&self) -> Vec<String> {
+        let struct_cols = R::columns();
+
+        if !struct_cols.is_empty() {
+            if !self.select_columns.is_empty() {
+                let mut args = Vec::new();
+                for col_info in struct_cols {
+                    let col_snake = col_info.column.to_snake_case();
+                    let sql_type = col_info.sql_type;
+                    if self.select_columns.contains(&col_snake) {
+                        if is_temporal_type(sql_type) {
+                            args.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake));
+                        } else {
+                            args.push(format!("\"{}\"", col_snake));
+                        }
+                    }
+                }
+                return args;
+            } else {
+                return struct_cols
+                    .iter()
+                    .map(|c| {
+                        let col_snake = c.column.to_snake_case();
+                        if is_temporal_type(c.sql_type) {
+                            format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake)
+                        } else {
+                            format!("\"{}\"", col_snake)
+                        }
+                    })
+                    .collect();
+            }
+        }
+
+        if !self.select_columns.is_empty() {
+            return self
+                .select_columns
+                .iter()
+                .map(|c| if c.contains('(') { c.clone() } else { format!("\"{}\"", c) })
+                .collect();
+        }
+
+        vec!["*".to_string()]
+    }
+
     /// Executes the query and returns a list of results.
     ///
     /// This method builds and executes a SELECT query with all accumulated filters,
@@ -793,15 +845,11 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     /// ```
     pub async fn scan<R>(self) -> Result<Vec<R>, sqlx::Error>
     where
-        R: for<'r> FromRow<'r, AnyRow> + Send + Unpin,
+        R: for<'r> FromRow<'r, AnyRow> + AnyImpl + Send + Unpin,
     {
         // Build SELECT clause
         let mut query = String::from("SELECT ");
-        if self.select_columns.is_empty() {
-            query.push('*');
-        } else {
-            query.push_str(&self.select_columns.join(", "));
-        }
+        query.push_str(&self.select_args_sql::<R>().join(", "));
 
         // Build FROM clause
         query.push_str(" FROM \"");
@@ -842,6 +890,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
             let _ = args.add(offset as i64);
         }
 
+        println!("{}", query);
         // Execute query and fetch all results
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(&self.db.pool).await
     }
@@ -897,15 +946,11 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     /// ```
     pub async fn first<R>(self) -> Result<R, sqlx::Error>
     where
-        R: for<'r> FromRow<'r, AnyRow> + Send + Unpin,
+        R: for<'r> FromRow<'r, AnyRow> + AnyImpl + Send + Unpin,
     {
         // Build SELECT clause
         let mut query = String::from("SELECT ");
-        if self.select_columns.is_empty() {
-            query.push('*');
-        } else {
-            query.push_str(&self.select_columns.join(", "));
-        }
+        query.push_str(&self.select_args_sql::<R>().join(", "));
 
         // Build FROM clause
         query.push_str(" FROM \"");
@@ -935,6 +980,8 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
 
         // Always add LIMIT 1 for first() queries
         query.push_str(" LIMIT 1");
+
+        println!("{}", query);
 
         // Execute query and fetch exactly one result
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(&self.db.pool).await
