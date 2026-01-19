@@ -204,6 +204,10 @@ mod types;
 /// macro, including attribute parsing and code generation.
 mod derive_model;
 
+/// FromAnyRow derive implementation module.
+///
+/// This module contains the logic for expanding the `#[derive(FromAnyRow)]`
+/// macro, facilitating the mapping of `AnyRow` results to Rust structs.
 mod derive_anyrow;
 
 // ============================================================================
@@ -302,6 +306,41 @@ pub fn model_derive(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Derives the `FromRow` trait for `AnyRow` and the `AnyImpl` trait.
+///
+/// This procedural macro generates an implementation of `sqlx::FromRow<'r, sqlx::any::AnyRow>`
+/// for the target struct, allowing it to be scanned directly from database results when
+/// using `sqlx::Any` driver (which Bottle ORM uses internally).
+///
+/// It also implements the `AnyImpl` trait, which provides necessary column metadata used
+/// by the `QueryBuilder` for dynamic query construction.
+///
+/// # Features
+///
+/// - **Automatic Field Mapping**: Maps database columns to struct fields by name.
+/// - **DateTime Handling**: Includes special logic to handle `DateTime` types, often required
+///   when dealing with the `Any` driver's type erasure or JSON serialization fallback.
+/// - **Metadata Generation**: Automatically generates `AnyInfo` for each field.
+///
+/// # Requirements
+///
+/// The struct must have named fields. Tuple structs and unit structs are not supported.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use bottle_orm::{FromAnyRow, AnyImpl};
+/// use chrono::{DateTime, Utc};
+///
+/// #[derive(FromAnyRow)]
+/// struct UserCount {
+///     count: i64,
+///     last_active: DateTime<Utc>,
+/// }
+///
+/// // Usage with QueryBuilder:
+/// // let stats: UserCount = db.model::<User>().select("count(*), last_active").first().await?;
+/// ```
 #[proc_macro_derive(FromAnyRow)]
 pub fn any_derive(input: TokenStream) -> TokenStream {
        let ast = parse_macro_input!(input as DeriveInput);
