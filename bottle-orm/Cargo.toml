@@ -1,6 +1,6 @@
 [package]
 name = "bottle-orm"
-version = "0.1.1"
+version = "0.2.1"
 edition = "2024"
 authors = ["Murilinho145SG"]
 description = "A lightweight and simple ORM for Rust built on top of sqlx"

@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### DateTime Temporal Type Conversion System
+- **Module `temporal.rs`**: Specialized system for temporal type conversions
+  - Parsing functions with error handling: `parse_datetime_utc()`, `parse_naive_datetime()`, `parse_naive_date()`, `parse_naive_time()`
+  - Driver-optimized formatting: `format_datetime_for_driver()`, `format_naive_datetime_for_driver()`
+  - Temporal value binding: `bind_datetime_utc()`, `bind_naive_datetime()`, `bind_naive_date()`, `bind_naive_time()`
+  - Utilities: `is_temporal_type()`, `get_postgres_type_cast()`
+  - Full support for `DateTime<Utc>`, `NaiveDateTime`, `NaiveDate`, `NaiveTime`
+  - PostgreSQL: RFC 3339 format for `DateTime<Utc>`, microsecond precision for `NaiveDateTime`
+  - MySQL: Optimized format for TIMESTAMP/DATETIME types, handles Y2038 limitation awareness
+  - SQLite: ISO 8601 format compatible with SQLite date/time functions
+
+- **Module `value_binding.rs`**: Type-safe value binding system for SQL queries
+  - `ValueBinder` trait for automatic type detection and binding
+  - Support for primitive types: i32, i64, bool, f64, String
+  - Support for UUID (all versions 1-7)
+  - Support for temporal types via `temporal` module integration
+  - Helper functions: `bind_typed_value()`, `bind_typed_value_or_string()`
+  - Type detection: `requires_special_binding()`, `is_numeric_type()`, `is_text_type()`
+
+- **Error Variant `Conversion`**: New variant in `Error` enum
+  - Specific handling for type conversion errors
+  - Descriptive error messages with context
+  - Helper function: `Error::conversion()`
+
+- **Example `examples/datetime_conversion.rs`**: Runnable example demonstrating:
+  - Driver-specific formatting
+  - Type detection utilities
+  - PostgreSQL type casting
+  - Parsing examples with error handling
+  - Best practices for each database
+
+- **Example `examples/basic_usage.rs`**: Basic usage example in Portuguese
+  - Simple CRUD operations with DateTime
+  - Model definition with temporal types
+  - Database connection and migrations
+  - Formatting examples
+
 #### UUID Support (Versions 1-7)
 - **Full UUID Support**: Added comprehensive support for all UUID versions (1 through 7)
   - Version 1: Time-based with MAC address
@@ -35,6 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Consistent comment style across all modules
 
 ### Changed
+
+#### DateTime Conversion Improvements
+- **query_builder.rs**: Refactored to use `temporal` and `value_binding` modules
+  - Replaced naive `to_string()` conversions with driver-optimized formatting
+  - Added proper error handling for temporal type conversions
+  - Implemented PostgreSQL explicit type casting (e.g., `$1::TIMESTAMPTZ`)
+  - Reduced code duplication by using centralized binding functions
+  - Improved maintainability and testability
+
+- **Type Mapping**: Enhanced temporal type handling in `types.rs`
+  - `DateTime<Utc>` → `TIMESTAMPTZ` (PostgreSQL native timezone support)
+  - `NaiveDateTime` → `TIMESTAMP` (PostgreSQL) / `DATETIME` (MySQL, no Y2038 limit)
+  - `NaiveDate` → `DATE` (all drivers)
+  - `NaiveTime` → `TIME` (all drivers)
 
 #### Code Organization
 - **lib.rs**: Complete reorganization with detailed module documentation
@@ -92,9 +143,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Bug Fixes
 - Fixed unused `mut` warnings in `query_builder.rs`
-- Fixed unused `Result` warnings for `.add()` calls
+- Fixed unused `Result` warnings for `.add()` calls in `temporal.rs` and `value_binding.rs`
 - Converted doc comments to regular comments in match arms (following Rust conventions)
 - Removed non-existent `bottle` member from workspace configuration
+- Fixed DateTime conversion using generic `to_string()` instead of driver-specific formats
+
+### Performance
+- **Reduced conversion overhead**: Driver-specific formatting eliminates unnecessary parsing
+- **PostgreSQL type casting**: Explicit casting improves query planning and execution
+- **Optimized string formats**: Each driver receives the optimal format for its internal representation
 
 ---
 

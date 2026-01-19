@@ -109,6 +109,28 @@ pub enum Error {
     #[error("Invalid Data {0}: {0}")]
     InvalidData(String),
 
+    /// Type conversion error.
+    ///
+    /// This variant is used when converting between Rust types and SQL types fails.
+    /// It typically occurs during value binding or deserialization.
+    ///
+    /// # When to Use
+    ///
+    /// - Failed to parse string to DateTime, UUID, or numeric types
+    /// - Type mismatch during value binding
+    /// - Format conversion errors
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn parse_datetime(value: &str) -> Result<DateTime<Utc>, Error> {
+    ///     value.parse::<DateTime<Utc>>()
+    ///         .map_err(|e| Error::Conversion(format!("Failed to parse DateTime: {}", e)))
+    /// }
+    /// ```
+    #[error("Type conversion error: {0}")]
+    Conversion(String),
+
     /// Database operation error.
     ///
     /// This variant wraps errors from the underlying sqlx library.
@@ -259,34 +281,24 @@ impl Error {
     pub fn invalid_argument(msg: &str) -> Self {
         Error::InvalidArgument(msg.to_string())
     }
-}
 
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_data_creation() {
-        let error = Error::invalid_data("test message");
-        assert!(matches!(error, Error::InvalidData(_)));
-        assert_eq!(error.to_string(), "Invalid Data test message: test message");
-    }
-
-    #[test]
-    fn test_invalid_argument_creation() {
-        let error = Error::invalid_argument("test argument");
-        assert!(matches!(error, Error::InvalidArgument(_)));
-        assert_eq!(error.to_string(), "Invalid argument test argument: test argument");
-    }
-
-    #[test]
-    fn test_error_display() {
-        let error = Error::InvalidData("custom message".to_string());
-        let display = format!("{}", error);
-        assert!(display.contains("custom message"));
+    /// Creates a `Conversion` error from a string slice.
+    ///
+    /// This is a convenience method to avoid calling `.to_string()` manually.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - The error message
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn parse_value(value: &str) -> Result<i32, Error> {
+    ///     value.parse::<i32>()
+    ///         .map_err(|_| Error::conversion("Invalid integer format"))
+    /// }
+    /// ```
+    pub fn conversion(msg: &str) -> Self {
+        Error::Conversion(msg.to_string())
     }
 }

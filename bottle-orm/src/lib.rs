@@ -91,6 +91,18 @@ pub mod migration;
 /// that can occur during ORM operations.
 pub mod errors;
 
+/// Temporal type conversion and handling.
+///
+/// Provides specialized conversion functions for chrono types (DateTime, NaiveDateTime, etc.)
+/// across different database drivers, optimizing for native database type support.
+pub mod temporal;
+
+/// Value binding utilities for SQL queries.
+///
+/// Provides type-safe value binding with automatic type detection and conversion,
+/// supporting all SQL types across different database drivers.
+pub mod value_binding;
+
 // ============================================================================
 // Public API Re-exports
 // ============================================================================

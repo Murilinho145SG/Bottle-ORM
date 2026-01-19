@@ -47,11 +47,10 @@
 // External Crate Imports
 // ============================================================================
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use heck::ToSnakeCase;
 use sqlx::{
-    any::{AnyArguments, AnyRow},
     Any, Arguments, Encode, FromRow, Type,
+    any::{AnyArguments, AnyRow},
 };
 use std::marker::PhantomData;
 use uuid::Uuid;
@@ -61,9 +60,11 @@ use uuid::Uuid;
 // ============================================================================
 
 use crate::{
+    Error,
     database::{Database, Drivers},
     model::{ColumnInfo, Model},
-    Error,
+    temporal,
+    value_binding::ValueBinder,
 };
 
 // ============================================================================
@@ -576,13 +577,14 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
                 Drivers::Postgres => {
                     let idx = i + 1;
                     // PostgreSQL requires explicit type casting for some types
-                    match *sql_type {
-                        "TIMESTAMPTZ" | "DateTime" => format!("${}::TIMESTAMPTZ", idx),
-                        "TIMESTAMP" | "NaiveDateTime" => format!("${}::TIMESTAMP", idx),
-                        "DATE" | "NaiveDate" => format!("${}::DATE", idx),
-                        "TIME" | "NaiveTime" => format!("${}::TIME", idx),
-                        "UUID" => format!("${}::UUID", idx),
-                        _ => format!("${}", idx),
+                    if temporal::is_temporal_type(sql_type) {
+                        // Use temporal module for type casting
+                        format!("${}{}", idx, temporal::get_postgres_type_cast(sql_type))
+                    } else {
+                        match *sql_type {
+                            "UUID" => format!("${}::UUID", idx),
+                            _ => format!("${}", idx),
+                        }
                     }
                 }
                 // MySQL and SQLite use simple ? placeholders
@@ -603,88 +605,91 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
 
         let mut query = sqlx::query::<sqlx::Any>(&query_str);
 
-        // Bind values with proper type conversion
+        // Bind values using the optimized value_binding module
+        // This provides type-safe binding with driver-specific optimizations
         for (val_str, sql_type) in bindings {
-            match sql_type {
-                // ------------------------------------------------------------
-                // Integer Types
-                // ------------------------------------------------------------
-                "INTEGER" | "INT" | "SERIAL" | "serial" | "int4" => {
-                    let val: i32 = val_str.parse().unwrap_or_default();
-                    query = query.bind(val);
-                }
-                "BIGINT" | "INT8" | "int8" => {
-                    let val: i64 = val_str.parse().unwrap_or_default();
-                    query = query.bind(val);
-                }
+            // Create temporary AnyArguments to collect the bound value
+            let mut temp_args = AnyArguments::default();
 
-                // ------------------------------------------------------------
-                // Boolean Type
-                // ------------------------------------------------------------
-                "BOOLEAN" | "BOOL" | "bool" => {
-                    let val: bool = val_str.parse().unwrap_or(false);
-                    query = query.bind(val);
-                }
-
-                // ------------------------------------------------------------
-                // Floating-Point Types
-                // ------------------------------------------------------------
-                "DOUBLE PRECISION" | "FLOAT" | "float8" => {
-                    let val: f64 = val_str.parse().unwrap_or_default();
-                    query = query.bind(val);
-                }
-
-                // ------------------------------------------------------------
-                // UUID Type (Versions 1-7)
-                // ------------------------------------------------------------
-                "UUID" => {
-                    // Parse the UUID string
-                    // Supports all UUID formats and versions (1-7)
-                    if let Ok(val) = val_str.parse::<Uuid>() {
-                        query = query.bind(val.to_string());
-                    } else {
-                        // Fallback: bind the raw string if parsing fails
+            // Use the ValueBinder trait for type-safe binding
+            if temp_args.bind_value(&val_str, sql_type, &self.db.driver).is_ok() {
+                // For now, we need to convert back to individual bindings
+                // This is a workaround until we can better integrate AnyArguments
+                match sql_type {
+                    "INTEGER" | "INT" | "SERIAL" | "serial" | "int4" => {
+                        if let Ok(val) = val_str.parse::<i32>() {
+                            query = query.bind(val);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "BIGINT" | "INT8" | "int8" | "BIGSERIAL" => {
+                        if let Ok(val) = val_str.parse::<i64>() {
+                            query = query.bind(val);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "BOOLEAN" | "BOOL" | "bool" => {
+                        if let Ok(val) = val_str.parse::<bool>() {
+                            query = query.bind(val);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "DOUBLE PRECISION" | "FLOAT" | "float8" | "REAL" | "NUMERIC" | "DECIMAL" => {
+                        if let Ok(val) = val_str.parse::<f64>() {
+                            query = query.bind(val);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "UUID" => {
+                        if let Ok(val) = val_str.parse::<Uuid>() {
+                            query = query.bind(val.hyphenated().to_string());
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "TIMESTAMPTZ" | "DateTime" => {
+                        if let Ok(val) = temporal::parse_datetime_utc(&val_str) {
+                            let formatted = temporal::format_datetime_for_driver(&val, &self.db.driver);
+                            query = query.bind(formatted);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "TIMESTAMP" | "NaiveDateTime" => {
+                        if let Ok(val) = temporal::parse_naive_datetime(&val_str) {
+                            let formatted = temporal::format_naive_datetime_for_driver(&val, &self.db.driver);
+                            query = query.bind(formatted);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "DATE" | "NaiveDate" => {
+                        if let Ok(val) = temporal::parse_naive_date(&val_str) {
+                            let formatted = val.format("%Y-%m-%d").to_string();
+                            query = query.bind(formatted);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    "TIME" | "NaiveTime" => {
+                        if let Ok(val) = temporal::parse_naive_time(&val_str) {
+                            let formatted = val.format("%H:%M:%S%.6f").to_string();
+                            query = query.bind(formatted);
+                        } else {
+                            query = query.bind(val_str);
+                        }
+                    }
+                    _ => {
                         query = query.bind(val_str);
                     }
                 }
-
-                // ------------------------------------------------------------
-                // Date/Time Types
-                // ------------------------------------------------------------
-                "TIMESTAMP" | "NaiveDateTime" => {
-                    if let Ok(val) = val_str.parse::<NaiveDateTime>() {
-                        query = query.bind(val.to_string());
-                    } else {
-                        query = query.bind(val_str);
-                    }
-                }
-                "TIMESTAMPTZ" | "DateTime" => {
-                    if let Ok(val) = val_str.parse::<DateTime<Utc>>() {
-                        query = query.bind(val.to_string());
-                    } else {
-                        query = query.bind(val_str);
-                    }
-                }
-                "DATE" | "NaiveDate" => {
-                    if let Ok(val) = val_str.parse::<NaiveDate>() {
-                        query = query.bind(val.to_string());
-                    } else {
-                        query = query.bind(val_str);
-                    }
-                }
-                "TIME" | "NaiveTime" => {
-                    if let Ok(val) = val_str.parse::<NaiveTime>() {
-                        query = query.bind(val.to_string());
-                    } else {
-                        query = query.bind(val_str);
-                    }
-                }
-
-                // ------------------------------------------------------------
-                // Text and Unknown Types
-                // ------------------------------------------------------------
-                // Default: bind as string
-                _ => query = query.bind(val_str),
+            } else {
+                // Fallback: bind as string if type conversion fails
+                query = query.bind(val_str);
             }
         }
 
