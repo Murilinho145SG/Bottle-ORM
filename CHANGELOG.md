@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### AnyImpl & FromAnyRow Support
+- **Macro `FromAnyRow`**: New derive macro for scanning arbitrary query results into structs
+  - Allows mapping `sqlx::any::AnyRow` to custom structs
+  - Handles type conversions automatically, with special logic for `DateTime`
+  - Eliminates the need for manual `FromRow` implementation for complex queries
+
+- **Trait `AnyImpl` & Struct `AnyInfo`**: New metadata system for dynamic row mapping
+  - `AnyImpl`: Trait for types that can be scanned from `AnyRow`
+  - `AnyInfo`: Struct containing column metadata (name, SQL type)
+  - Helper macro `impl_any_primitive!` for basic types
+  - Implementations for standard types (`bool`, integers, floats, `String`, `Uuid`, `chrono` types)
+
+- **QueryBuilder Integration**: Updated `scan()` and `first()` to support `AnyImpl`
+  - Seamless integration with `FromAnyRow` derived structs
+  - Automatic `to_json` casting for temporal types (`DateTime`, `NaiveDateTime`, etc.) in SELECT clauses to ensure compatibility across drivers when using `AnyRow`
+
 #### DateTime Temporal Type Conversion System
 - **Module `temporal.rs`**: Specialized system for temporal type conversions
   - Parsing functions with error handling: `parse_datetime_utc()`, `parse_naive_datetime()`, `parse_naive_date()`, `parse_naive_time()`
