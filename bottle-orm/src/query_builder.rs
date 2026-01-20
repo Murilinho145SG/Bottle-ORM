@@ -289,6 +289,26 @@ where
         self
     }
     
+    /// Adds an equality filter to the query.
+    ///
+    /// This is a convenience wrapper around `filter()` for simple equality checks.
+    /// It is equivalent to calling `filter(col, "=", value)`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `V` - The type of the value to compare against.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to filter on.
+    /// * `value` - The value to match.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Equivalent to filter("age", "=", 18)
+    /// query.equals("age", 18)
+    /// ```
     pub fn equals<V>(self, col: &'static str, value: V) -> Self
     where 
     	V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone

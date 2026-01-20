@@ -494,6 +494,24 @@ impl Database {
         Ok(self)
     }
 
+    /// Starts a new database transaction.
+    ///
+    /// Returns a `Transaction` wrapper that can be used to execute multiple
+    /// queries atomically. The transaction must be explicitly committed
+    /// using `commit()`, otherwise it will be rolled back when dropped.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Transaction)` - A new transaction instance
+    /// * `Err(sqlx::Error)` - Database error starting transaction
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut tx = db.begin().await?;
+    /// // ... perform operations ...
+    /// tx.commit().await?;
+    /// ```
     pub async fn begin<'a>(&self) -> Result<Transaction<'a>, sqlx::Error> {
         let tx = self.pool.begin().await?;
         Ok(Transaction { tx, driver: self.driver })
@@ -640,6 +658,9 @@ pub trait Connection {
     fn driver(&self) -> Drivers;
 }
 
+/// Implementation of Connection for the main Database struct.
+///
+/// Uses the internal connection pool to execute queries.
 impl Connection for Database {
     type Exec<'c> = &'c sqlx::Pool<sqlx::Any>;
 

@@ -15,6 +15,11 @@ pub struct Transaction<'a> {
     pub(crate) driver: Drivers,
 }
 
+/// Implementation of Connection for a mutable reference to a Transaction.
+///
+/// Allows the `QueryBuilder` to use a transaction for executing queries.
+/// Supports generic borrow lifetimes to allow multiple operations within
+/// the same transaction scope.
 impl<'a> Connection for &mut Transaction<'a> {
     type Exec<'c> = &'c mut sqlx::AnyConnection
     where
