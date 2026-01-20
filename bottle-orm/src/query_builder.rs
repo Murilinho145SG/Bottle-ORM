@@ -50,7 +50,7 @@
 use heck::ToSnakeCase;
 use sqlx::{
     any::{AnyArguments, AnyRow},
-    Any, Arguments, Decode, Encode, FromRow, Type,
+    Any, Arguments, Decode, Encode, FromRow, Row, Type,
 };
 use std::marker::PhantomData;
 use uuid::Uuid;
@@ -982,5 +982,71 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
 
         // Execute query and fetch exactly one result
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(&self.db.pool).await
+    }
+
+    /// Executes the query and returns a single scalar value.
+    ///
+    /// This method is useful for fetching single values like counts, max/min values,
+    /// or specific columns without mapping to a struct or tuple.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `O` - The output type. Must implement `Decode` and `Type`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Get count of users
+    /// let count: i64 = db.model::<User>()
+    ///     .select("count(*)")
+    ///     .scalar()
+    ///     .await?;
+    ///
+    /// // Get specific field
+    /// let username: String = db.model::<User>()
+    ///     .filter("id", "=", 1)
+    ///     .select("username")
+    ///     .scalar()
+    ///     .await?;
+    /// ```
+    pub async fn scalar<O>(self) -> Result<O, sqlx::Error>
+    where
+        O: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
+    {
+        // Build SELECT clause
+        let mut query = String::from("SELECT ");
+        
+        if self.select_columns.is_empty() {
+        	return Err(sqlx::Error::ColumnNotFound("is not possible get data without column".to_string()))
+        }
+        
+        query.push_str(&self.select_columns.join(", "));
+
+        // Build FROM clause
+        query.push_str(" FROM \"");
+        query.push_str(&self.table_name.to_snake_case());
+        query.push_str("\" WHERE 1=1");
+
+        // Apply WHERE clauses
+        let mut args = AnyArguments::default();
+        let mut arg_counter = 1;
+
+        for clause in &self.where_clauses {
+            clause(&mut query, &mut args, &self.db.driver, &mut arg_counter);
+        }
+
+        // Apply ORDER BY
+        if !self.order_clauses.is_empty() {
+            query.push_str(&format!(" ORDER BY {}", &self.order_clauses.join(", ")));
+        }
+
+        // Always add LIMIT 1 for scalar queries
+        query.push_str(" LIMIT 1");
+
+        // Execute query and fetch one row
+        let row = sqlx::query_with::<_, _>(&query, args).fetch_one(&self.db.pool).await?;
+
+        // Get the first column
+        row.try_get::<O, _>(0)
     }
 }

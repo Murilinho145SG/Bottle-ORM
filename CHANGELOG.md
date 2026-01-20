@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Seamless integration with `FromAnyRow` derived structs
   - Automatic `to_json` casting for temporal types (`DateTime`, `NaiveDateTime`, etc.) in SELECT clauses to ensure compatibility across drivers when using `AnyRow`
 
+#### Query Builder Enhancements
+- **Method `scalar()`**: Added support for fetching single scalar values directly
+  - Enables intuitive queries like `let count: i64 = query.select("count(*)").scalar().await?;`
+  - Bypasses `FromRow` requirement for simple primitive types (`i32`, `String`, etc.)
+
+- **Tuple Support**: Implemented `AnyImpl` for tuples (up to 8 elements)
+  - Allows scanning results directly into tuples: `let (id, name): (i32, String) = ...`
+
 #### DateTime Temporal Type Conversion System
 - **Module `temporal.rs`**: Specialized system for temporal type conversions
   - Parsing functions with error handling: `parse_datetime_utc()`, `parse_naive_datetime()`, `parse_naive_date()`, `parse_naive_time()`

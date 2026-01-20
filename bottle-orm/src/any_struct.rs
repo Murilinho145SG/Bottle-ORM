@@ -76,3 +76,22 @@ impl<T: AnyImpl> AnyImpl for Option<T> {
         T::columns()
     }
 }
+
+macro_rules! impl_any_tuple {
+    ($($T:ident),+) => {
+        impl<$($T: AnyImpl),+> AnyImpl for ($($T,)+) {
+            fn columns() -> Vec<AnyInfo> {
+                Vec::new()
+            }
+        }
+    };
+}
+
+impl_any_tuple!(T1);
+impl_any_tuple!(T1, T2);
+impl_any_tuple!(T1, T2, T3);
+impl_any_tuple!(T1, T2, T3, T4);
+impl_any_tuple!(T1, T2, T3, T4, T5);
+impl_any_tuple!(T1, T2, T3, T4, T5, T6);
+impl_any_tuple!(T1, T2, T3, T4, T5, T6, T7);
+impl_any_tuple!(T1, T2, T3, T4, T5, T6, T7, T8);
