@@ -60,11 +60,7 @@ use uuid::Uuid;
 // ============================================================================
 
 use crate::{
-    database::{Database, Drivers},
-    model::{ColumnInfo, Model},
-    temporal::{self, is_temporal_type},
-    value_binding::ValueBinder,
-    AnyImpl, Error,
+    AnyImpl, Error, database::{Connection, Drivers}, model::{ColumnInfo, Model}, temporal::{self, is_temporal_type}, value_binding::ValueBinder
 };
 
 // ============================================================================
@@ -108,12 +104,13 @@ pub type FilterFn = Box<dyn Fn(&mut String, &mut AnyArguments<'_>, &Drivers, &mu
 ///
 /// ## Type Parameter
 ///
-/// * `'a` - Lifetime of the database reference
+/// * `'a` - Lifetime of the database reference (used for PhantomData)
 /// * `T` - The Model type this query operates on
+/// * `E` - The connection type (Database or Transaction)
 ///
 /// ## Fields
 ///
-/// * `db` - Reference to the database connection pool
+/// * `db` - Reference to the database connection pool or transaction
 /// * `table_name` - Static string containing the table name
 /// * `columns_info` - Metadata about each column in the table
 /// * `columns` - List of column names in snake_case format
@@ -123,9 +120,12 @@ pub type FilterFn = Box<dyn Fn(&mut String, &mut AnyArguments<'_>, &Drivers, &mu
 /// * `limit` - Maximum number of rows to return
 /// * `offset` - Number of rows to skip (for pagination)
 /// * `_marker` - PhantomData to bind the generic type T
-pub struct QueryBuilder<'a, T> {
+pub struct QueryBuilder<'a, T, E>
+where
+	E: Connection,
+{
     /// Reference to the database connection pool
-    pub(crate) db: &'a Database,
+    pub(crate) tx: E,
 
     /// Name of the database table (in original case)
     pub(crate) table_name: &'static str,
@@ -152,14 +152,18 @@ pub struct QueryBuilder<'a, T> {
     pub(crate) offset: Option<usize>,
 
     /// PhantomData to bind the generic type T
-    pub(crate) _marker: PhantomData<T>,
+    pub(crate) _marker: PhantomData<&'a T>,
 }
 
 // ============================================================================
 // QueryBuilder Implementation
 // ============================================================================
 
-impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
+impl<'a, T, E> QueryBuilder<'a, T, E>
+where
+    T: Model + Send + Sync + Unpin,
+    E: Connection,
+{
     // ========================================================================
     // Constructor
     // ========================================================================
@@ -187,13 +191,13 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     /// let query = db.model::<User>();
     /// ```
     pub fn new(
-        db: &'a Database,
+        tx: E,
         table_name: &'static str,
         columns_info: Vec<ColumnInfo>,
         columns: Vec<String>,
     ) -> Self {
         Self {
-            db,
+            tx,
             table_name,
             columns_info,
             columns,
@@ -283,6 +287,13 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
 
         self.where_clauses.push(clause);
         self
+    }
+    
+    pub fn equals<V>(self, col: &'static str, value: V) -> Self
+    where 
+    	V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone
+    {
+    	self.filter(col, "=", value)
     }
 
     /// Adds an ORDER BY clause to the query.
@@ -542,13 +553,13 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     ///
     /// db.model::<User>().insert(&new_user).await?;
     /// ```
-    pub async fn insert(&self, model: &T) -> Result<&Self, sqlx::Error> {
+    pub async fn insert(&mut self, model: &T) -> Result<&Self, sqlx::Error> {
         // Serialize model to a HashMap of column_name -> string_value
         let data_map = model.to_map();
 
         // Early return if no data to insert
         if data_map.is_empty() {
-            return Ok(&self);
+            return Ok(self);
         }
 
         let table_name = self.table_name.to_snake_case();
@@ -573,7 +584,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         let placeholders: Vec<String> = bindings
             .iter()
             .enumerate()
-            .map(|(i, (_, sql_type))| match self.db.driver {
+            .map(|(i, (_, sql_type))| match self.tx.driver() {
                 Drivers::Postgres => {
                     let idx = i + 1;
                     // PostgreSQL requires explicit type casting for some types
@@ -612,7 +623,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
             let mut temp_args = AnyArguments::default();
 
             // Use the ValueBinder trait for type-safe binding
-            if temp_args.bind_value(&val_str, sql_type, &self.db.driver).is_ok() {
+            if temp_args.bind_value(&val_str, sql_type, &self.tx.driver()).is_ok() {
                 // For now, we need to convert back to individual bindings
                 // This is a workaround until we can better integrate AnyArguments
                 match sql_type {
@@ -653,7 +664,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
                     }
                     "TIMESTAMPTZ" | "DateTime" => {
                         if let Ok(val) = temporal::parse_datetime_utc(&val_str) {
-                            let formatted = temporal::format_datetime_for_driver(&val, &self.db.driver);
+                            let formatted = temporal::format_datetime_for_driver(&val, &self.tx.driver());
                             query = query.bind(formatted);
                         } else {
                             query = query.bind(val_str);
@@ -661,7 +672,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
                     }
                     "TIMESTAMP" | "NaiveDateTime" => {
                         if let Ok(val) = temporal::parse_naive_datetime(&val_str) {
-                            let formatted = temporal::format_naive_datetime_for_driver(&val, &self.db.driver);
+                            let formatted = temporal::format_naive_datetime_for_driver(&val, &self.tx.driver());
                             query = query.bind(formatted);
                         } else {
                             query = query.bind(val_str);
@@ -694,8 +705,8 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         }
 
         // Execute the INSERT query
-        query.execute(&self.db.pool).await?;
-        Ok(&self)
+        query.execute(self.tx.executor()).await?;
+        Ok(self)
     }
 
     // ========================================================================
@@ -742,7 +753,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         let mut dummy_counter = 1;
 
         for clause in &self.where_clauses {
-            clause(&mut query, &mut dummy_args, &self.db.driver, &mut dummy_counter);
+            clause(&mut query, &mut dummy_args, &self.tx.driver(), &mut dummy_counter);
         }
 
         // Apply ORDER BY if present
@@ -843,7 +854,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     ///     .scan()
     ///     .await?;  // Returns empty Vec, not an error
     /// ```
-    pub async fn scan<R>(self) -> Result<Vec<R>, sqlx::Error>
+    pub async fn scan<R>(mut self) -> Result<Vec<R>, sqlx::Error>
     where
         R: for<'r> FromRow<'r, AnyRow> + AnyImpl + Send + Unpin,
     {
@@ -861,13 +872,13 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         let mut arg_counter = 1;
 
         for clause in &self.where_clauses {
-            clause(&mut query, &mut args, &self.db.driver, &mut arg_counter);
+            clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
         }
 
         // Apply LIMIT clause
         if let Some(limit) = self.limit {
             query.push_str(" LIMIT ");
-            match self.db.driver {
+            match self.tx.driver() {
                 Drivers::Postgres => {
                     query.push_str(&format!("${}", arg_counter));
                     arg_counter += 1;
@@ -880,7 +891,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         // Apply OFFSET clause
         if let Some(offset) = self.offset {
             query.push_str(" OFFSET ");
-            match self.db.driver {
+            match self.tx.driver() {
                 Drivers::Postgres => {
                     query.push_str(&format!("${}", arg_counter));
                     // arg_counter += 1; // Not needed as this is the last clause
@@ -891,7 +902,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         }
 
         // Execute query and fetch all results
-        sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(&self.db.pool).await
+        sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(self.tx.executor()).await
     }
 
     /// Executes the query and returns only the first result.
@@ -943,7 +954,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     ///     Err(e) => println!("Database error: {}", e),
     /// }
     /// ```
-    pub async fn first<R>(self) -> Result<R, sqlx::Error>
+    pub async fn first<R>(mut self) -> Result<R, sqlx::Error>
     where
         R: for<'r> FromRow<'r, AnyRow> + AnyImpl + Send + Unpin,
     {
@@ -961,7 +972,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         let mut arg_counter = 1;
 
         for clause in &self.where_clauses {
-            clause(&mut query, &mut args, &self.db.driver, &mut arg_counter);
+            clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
         }
 
         // Find primary key column for consistent ordering
@@ -981,7 +992,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         query.push_str(" LIMIT 1");
 
         // Execute query and fetch exactly one result
-        sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(&self.db.pool).await
+        sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(self.tx.executor()).await
     }
 
     /// Executes the query and returns a single scalar value.
@@ -1009,17 +1020,17 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
     ///     .scalar()
     ///     .await?;
     /// ```
-    pub async fn scalar<O>(self) -> Result<O, sqlx::Error>
+    pub async fn scalar<O>(mut self) -> Result<O, sqlx::Error>
     where
         O: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
         // Build SELECT clause
         let mut query = String::from("SELECT ");
-        
+
         if self.select_columns.is_empty() {
-        	return Err(sqlx::Error::ColumnNotFound("is not possible get data without column".to_string()))
+            return Err(sqlx::Error::ColumnNotFound("is not possible get data without column".to_string()));
         }
-        
+
         query.push_str(&self.select_columns.join(", "));
 
         // Build FROM clause
@@ -1032,7 +1043,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         let mut arg_counter = 1;
 
         for clause in &self.where_clauses {
-            clause(&mut query, &mut args, &self.db.driver, &mut arg_counter);
+            clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
         }
 
         // Apply ORDER BY
@@ -1044,7 +1055,7 @@ impl<'a, T: Model + Send + Sync + Unpin> QueryBuilder<'a, T> {
         query.push_str(" LIMIT 1");
 
         // Execute query and fetch one row
-        let row = sqlx::query_with::<_, _>(&query, args).fetch_one(&self.db.pool).await?;
+        let row = sqlx::query_with::<_, _>(&query, args).fetch_one(self.tx.executor()).await?;
 
         // Get the first column
         row.try_get::<O, _>(0)

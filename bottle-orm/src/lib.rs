@@ -97,6 +97,8 @@ pub mod query_builder;
 /// automatic table creation and foreign key assignment.
 pub mod migration;
 
+pub mod transaction;
+
 /// Error types and handling.
 ///
 /// Defines the `Error` enum with variants for different error scenarios
@@ -136,6 +138,8 @@ pub use model::{ColumnInfo, Model};
 /// `AnyImpl` is the trait implemented by structs that can be scanned from `AnyRow`,
 /// providing necessary column metadata via `AnyInfo`.
 pub use any_struct::{AnyImpl, AnyInfo};
+
+pub use transaction::Transaction;
 
 /// Re-export of the `QueryBuilder` for constructing and executing queries.
 ///

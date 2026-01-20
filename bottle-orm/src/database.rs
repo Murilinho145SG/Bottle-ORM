@@ -52,7 +52,7 @@ use sqlx::{any::AnyPoolOptions, AnyPool, Error, Row};
 // Internal Crate Imports
 // ============================================================================
 
-use crate::{migration::Migrator, model::Model, query_builder::QueryBuilder};
+use crate::{migration::Migrator, model::Model, query_builder::QueryBuilder, Transaction};
 
 // ============================================================================
 // Database Driver Enumeration
@@ -96,7 +96,7 @@ use crate::{migration::Migrator, model::Model, query_builder::QueryBuilder};
 ///     Drivers::MySQL => println!("Using MySQL"),
 /// }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub enum Drivers {
     /// PostgreSQL driver.
     ///
@@ -348,7 +348,7 @@ impl Database {
     /// * [`QueryBuilder::filter()`] - For adding WHERE clauses
     /// * [`QueryBuilder::scan()`] - For executing SELECT queries
     /// * [`QueryBuilder::insert()`] - For INSERT operations
-    pub fn model<T: Model + Send + Sync + Unpin>(&self) -> QueryBuilder<'_, T> {
+    pub fn model<T: Model + Send + Sync + Unpin>(&self) -> QueryBuilder<'_, T, Self> {
         // Get active column names from the model
         let active_columns = T::active_columns();
         let mut columns: Vec<String> = Vec::with_capacity(active_columns.capacity());
@@ -359,7 +359,7 @@ impl Database {
         }
 
         // Create and return the query builder
-        QueryBuilder::new(self, T::table_name(), T::columns(), columns)
+        QueryBuilder::new(self.clone(), T::table_name(), T::columns(), columns)
     }
 
     // ========================================================================
@@ -483,7 +483,7 @@ impl Database {
         let create_table_query =
             format!("CREATE TABLE IF NOT EXISTS \"{}\" ({})", table_name.to_snake_case(), column_defs.join(", "));
         println!("{}", create_table_query);
-        
+
         sqlx::query(&create_table_query).execute(&self.pool).await?;
 
         // Create indexes
@@ -492,6 +492,11 @@ impl Database {
         }
 
         Ok(self)
+    }
+
+    pub async fn begin<'a>(&self) -> Result<Transaction<'a>, sqlx::Error> {
+        let tx = self.pool.begin().await?;
+        Ok(Transaction { tx, driver: self.driver })
     }
 
     // ========================================================================
@@ -607,5 +612,42 @@ impl Database {
         }
 
         Ok(self)
+    }
+}
+
+/// A trait representing a database connection or transaction.
+///
+/// This trait abstracts over `Database` (pool) and `Transaction` types, allowing
+/// the `QueryBuilder` to work seamlessly with both. It uses Generic Associated Types (GATs)
+/// to handle the lifetimes of the executor references correctly.
+pub trait Connection {
+    /// The type of the executor returned by this connection.
+    ///
+    /// This uses GATs to bind the lifetime of the executor (`'c`) to the lifetime
+    /// of the borrow of the connection (`&'c mut self`).
+    type Exec<'c>: sqlx::Executor<'c, Database = sqlx::Any>
+    where
+        Self: 'c;
+
+    /// Returns a mutable reference to the SQLx executor.
+    ///
+    /// # Returns
+    ///
+    /// An executor capable of running SQL queries (either a Pool or a Transaction).
+    fn executor<'c>(&'c mut self) -> Self::Exec<'c>;
+
+    /// Returns the driver type associated with this connection.
+    fn driver(&self) -> Drivers;
+}
+
+impl Connection for Database {
+    type Exec<'c> = &'c sqlx::Pool<sqlx::Any>;
+
+    fn driver(&self) -> Drivers {
+        self.driver.clone()
+    }
+
+    fn executor<'c>(&'c mut self) -> Self::Exec<'c> {
+        &self.pool
     }
 }
