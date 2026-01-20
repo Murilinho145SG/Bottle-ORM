@@ -76,6 +76,34 @@ pub fn expand(input: DeriveInput) -> TokenStream {
 
     let field_names = fields.iter().map(|f| &f.ident);
 
+    // Generate to_map implementation
+    let map_inserts = fields.iter().map(|f| {
+        let field_name = &f.ident;
+        let field_type = &f.ty;
+
+        let (_, is_nullable) = rust_type_to_sql(field_type);
+
+        // Handle Option<T> fields specially - only insert if Some
+        if is_nullable {
+            return quote! {
+                if let Some(val) = &self.#field_name {
+                    map.insert(
+                        stringify!(#field_name).to_string(),
+                        val.to_string()
+                    );
+                }
+            };
+        }
+
+        // Regular fields are always inserted
+        quote! {
+            map.insert(
+                stringify!(#field_name).to_string(),
+                 self.#field_name.to_string()
+            );
+        }
+    });
+
     // Combine everything into the final implementation
     quote! {
         impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for #struct_name {
@@ -93,6 +121,12 @@ pub fn expand(input: DeriveInput) -> TokenStream {
              fn columns() -> Vec<bottle_orm::AnyInfo> {
                   vec![#(#col_query),*]
               }
+
+             fn to_map(&self) -> std::collections::HashMap<String, String> {
+                let mut map = std::collections::HashMap::new();
+                #(#map_inserts)*
+                map
+             }
          }
     }
 }

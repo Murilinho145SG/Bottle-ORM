@@ -148,7 +148,7 @@ where
 
     /// Collection of ORDER BY clauses
     pub(crate) order_clauses: Vec<String>,
-    
+
     /// Collection of JOIN clause to filter entry tables
     pub(crate) joins_clauses: Vec<String>,
 
@@ -929,7 +929,7 @@ where
             }
             let _ = args.add(offset as i64);
         }
-        
+
         // Execute query and fetch all results
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(self.tx.executor()).await
     }
@@ -1003,7 +1003,7 @@ where
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
         }
-        
+
         // Find primary key column for consistent ordering
         let pk_column = T::columns()
             .iter()
@@ -1078,7 +1078,7 @@ where
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
         }
-        
+
         // Apply ORDER BY
         if !self.order_clauses.is_empty() {
             query.push_str(&format!(" ORDER BY {}", &self.order_clauses.join(", ")));
@@ -1092,5 +1092,166 @@ where
 
         // Get the first column
         row.try_get::<O, _>(0)
+    }
+
+    /// Updates a single column in the database.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to update
+    /// * `value` - The new value
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(u64)` - The number of rows affected
+    pub async fn update<V>(&mut self, col: &str, value: V) -> Result<u64, sqlx::Error>
+    where
+        V: ToString + Send + Sync,
+    {
+        let mut map = std::collections::HashMap::new();
+        map.insert(col.to_string(), value.to_string());
+        self.execute_update(map).await
+    }
+
+    /// Updates all columns based on the model instance.
+    ///
+    /// This method updates all active columns of the table with values from the provided model.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model instance containing new values
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(u64)` - The number of rows affected
+    pub async fn updates(&mut self, model: &T) -> Result<u64, sqlx::Error> {
+        self.execute_update(model.to_map()).await
+    }
+
+    /// Updates columns based on a partial model (struct implementing AnyImpl).
+    ///
+    /// This allows updating a subset of columns using a custom struct.
+    /// The struct must implement `AnyImpl` (usually via `#[derive(FromAnyRow)]`).
+    ///
+    /// # Arguments
+    ///
+    /// * `partial` - The partial model containing new values
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(u64)` - The number of rows affected
+    pub async fn update_partial<P: AnyImpl>(&mut self, partial: &P) -> Result<u64, sqlx::Error> {
+        self.execute_update(partial.to_map()).await
+    }
+
+    /// Internal helper to execute an UPDATE query from a map of values.
+    async fn execute_update(
+        &mut self,
+        data_map: std::collections::HashMap<String, String>,
+    ) -> Result<u64, sqlx::Error> {
+        let table_name = self.table_name.to_snake_case();
+        let mut query = format!("UPDATE \"{}\" SET ", table_name);
+
+        let mut bindings: Vec<(String, &str)> = Vec::new();
+        let mut set_clauses = Vec::new();
+
+        // Maintain argument counter for PostgreSQL ($1, $2, ...)
+        let mut arg_counter = 1;
+
+        // Build SET clause
+        for (col_name, value) in data_map {
+            // Strip the "r#" prefix if present
+            let col_name_clean = col_name.strip_prefix("r#").unwrap_or(&col_name).to_snake_case();
+
+            // Find the SQL type for this column from the Model metadata
+            let sql_type = self
+                .columns_info
+                .iter()
+                .find(|c| c.name == col_name || c.name == col_name_clean)
+                .map(|c| c.sql_type)
+                .unwrap_or("TEXT");
+
+            // Generate placeholder
+            let placeholder = match self.tx.driver() {
+                Drivers::Postgres => {
+                    let idx = arg_counter;
+                    arg_counter += 1;
+
+                    if temporal::is_temporal_type(sql_type) {
+                        format!("${}{}", idx, temporal::get_postgres_type_cast(sql_type))
+                    } else {
+                        match sql_type {
+                            "UUID" => format!("${}::UUID", idx),
+                            _ => format!("${}", idx),
+                        }
+                    }
+                }
+                _ => "?".to_string(),
+            };
+
+            set_clauses.push(format!("\"{}\" = {}", col_name_clean, placeholder));
+            bindings.push((value, sql_type));
+        }
+
+        // If no fields to update, return 0
+        if set_clauses.is_empty() {
+            return Ok(0);
+        }
+
+        query.push_str(&set_clauses.join(", "));
+
+        // Build WHERE clause
+        query.push_str(" WHERE 1=1");
+
+        let mut args = AnyArguments::default();
+
+        // Bind SET values
+        for (val_str, sql_type) in bindings {
+            if args
+                .bind_value(&val_str, sql_type, &self.tx.driver())
+                .is_err()
+            {
+                let _ = args.add(val_str);
+            }
+        }
+
+        // Apply WHERE clauses (appending to args and query)
+        for clause in &self.where_clauses {
+            clause(
+                &mut query,
+                &mut args,
+                &self.tx.driver(),
+                &mut arg_counter,
+            );
+        }
+
+        // Execute the UPDATE query
+        let result = sqlx::query_with(&query, args)
+            .execute(self.tx.executor())
+            .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Executes a DELETE query based on the current filters.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(u64)` - The number of rows deleted
+    /// * `Err(sqlx::Error)` - Database error
+    pub async fn delete(mut self) -> Result<u64, sqlx::Error> {
+        let mut query = String::from("DELETE FROM \"");
+        query.push_str(&self.table_name.to_snake_case());
+        query.push_str("\" WHERE 1=1");
+
+        let mut args = AnyArguments::default();
+        let mut arg_counter = 1;
+
+        for clause in &self.where_clauses {
+            clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
+        }
+
+        let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
+        Ok(result.rows_affected())
     }
 }

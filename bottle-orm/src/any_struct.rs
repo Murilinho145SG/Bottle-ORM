@@ -30,6 +30,8 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
+
 // ============================================================================
 // AnyInfo Structure
 // ============================================================================
@@ -62,6 +64,9 @@ pub struct AnyInfo {
 pub trait AnyImpl {
     /// Returns a vector of `AnyInfo` describing the columns associated with this type.
     fn columns() -> Vec<AnyInfo>;
+
+    /// Converts this instance to a HashMap for dynamic query building.
+    fn to_map(&self) -> HashMap<String, String>;
 }
 
 // ============================================================================
@@ -74,6 +79,10 @@ macro_rules! impl_any_primitive {
             impl AnyImpl for $t {
                 fn columns() -> Vec<AnyInfo> {
                     Vec::new()
+                }
+
+                fn to_map(&self) -> HashMap<String, String> {
+                    HashMap::new()
                 }
             }
         )*
@@ -96,11 +105,19 @@ impl AnyImpl for uuid::Uuid {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
+
+    fn to_map(&self) -> HashMap<String, String> {
+        HashMap::new()
+    }
 }
 
 impl AnyImpl for chrono::NaiveDateTime {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
+    }
+
+    fn to_map(&self) -> HashMap<String, String> {
+        HashMap::new()
     }
 }
 
@@ -108,17 +125,29 @@ impl AnyImpl for chrono::NaiveDate {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
+
+    fn to_map(&self) -> HashMap<String, String> {
+        HashMap::new()
+    }
 }
 
 impl AnyImpl for chrono::NaiveTime {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
+
+    fn to_map(&self) -> HashMap<String, String> {
+        HashMap::new()
+    }
 }
 
 impl AnyImpl for chrono::DateTime<chrono::Utc> {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
+    }
+
+    fn to_map(&self) -> HashMap<String, String> {
+        HashMap::new()
     }
 }
 
@@ -129,6 +158,13 @@ impl AnyImpl for chrono::DateTime<chrono::Utc> {
 impl<T: AnyImpl> AnyImpl for Option<T> {
     fn columns() -> Vec<AnyInfo> {
         T::columns()
+    }
+
+    fn to_map(&self) -> HashMap<String, String> {
+        match self {
+            Some(v) => v.to_map(),
+            None => HashMap::new(),
+        }
     }
 }
 
@@ -141,6 +177,10 @@ macro_rules! impl_any_tuple {
         impl<$($T: AnyImpl),+> AnyImpl for ($($T,)+) {
             fn columns() -> Vec<AnyInfo> {
                 Vec::new()
+            }
+
+            fn to_map(&self) -> HashMap<String, String> {
+                HashMap::new()
             }
         }
     };

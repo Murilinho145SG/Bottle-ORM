@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.2-rc.3] - 2026-01-20
 
 ### Added
+- **Update & Delete Support**: Implemented comprehensive update and delete capabilities in `QueryBuilder`.
+  - `update(col, value)`: Efficiently update a single column with type safety.
+  - `updates(model)`: Update all active columns using a full model instance.
+  - `update_partial(partial)`: Update a specific subset of columns using a custom partial struct (via `AnyImpl`).
+  - `delete()`: Delete rows matching the current filter criteria.
+- **AnyImpl Enhancements**: Added `to_map()` to `AnyImpl` trait, enabling partial structs to be used for dynamic update queries.
 - **JOIN Support Preparation**: Added `joins_clauses` field to `QueryBuilder` structure to support future JOIN operations.
 
 ### Fixed
