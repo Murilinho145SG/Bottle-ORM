@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-01-21
+
+### Changed
+- **Debug Mode Improvements**: Replaced `println!` with `log::debug!` for query logging.
+  - Queries are now logged at the `DEBUG` level.
+- **Foreign Key Validation**: Relaxed `Option<T>` requirement for fields annotated with `#[foreign_key]` to prepare for future eager loading features.
+- **Documentation**: Added documentation for the `.debug()` method.
+
 ## [0.3.0] - 2026-01-21
 
 ### Added

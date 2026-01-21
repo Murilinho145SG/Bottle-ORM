@@ -78,7 +78,7 @@ impl<'a> Connection for &mut Transaction<'a> {
         Self: 'c;
 
     fn driver(&self) -> Drivers {
-        (**self).driver
+        self.driver
     }
 
     fn executor<'c>(&'c mut self) -> Self::Exec<'c> {

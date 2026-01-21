@@ -270,7 +270,7 @@ impl Database {
 
         Ok(Self { pool, driver })
     }
-
+    
     // ========================================================================
     // Schema Management
     // ========================================================================
@@ -482,7 +482,7 @@ impl Database {
         // Build and execute CREATE TABLE statement
         let create_table_query =
             format!("CREATE TABLE IF NOT EXISTS \"{}\" ({})", table_name.to_snake_case(), column_defs.join(", "));
-        println!("{}", create_table_query);
+        log::info!("{}", create_table_query);
 
         sqlx::query(&create_table_query).execute(&self.pool).await?;
 
@@ -665,7 +665,7 @@ impl Connection for Database {
     type Exec<'c> = &'c sqlx::Pool<sqlx::Any>;
 
     fn driver(&self) -> Drivers {
-        self.driver.clone()
+        self.driver
     }
 
     fn executor<'c>(&'c mut self) -> Self::Exec<'c> {

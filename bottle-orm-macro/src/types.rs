@@ -117,15 +117,13 @@ pub fn rust_type_to_sql(ty: &Type) -> (String, bool) {
             // 1. Extract the inner type T
             // 2. Map T to its SQL type
             // 3. Mark the column as nullable
-            if type_name == "Option" {
-                if let PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+            if type_name == "Option"
+                && let PathArguments::AngleBracketed(args) = &segment.arguments
+                    && let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
                         // Recursively map the inner type and force nullable = true
                         let (inner_sql_type, _ignored_nullable) = rust_type_to_sql(inner_ty);
                         return (inner_sql_type, true);
                     }
-                }
-            }
 
             // ================================================================
             // Map non-nullable types to their SQL equivalents

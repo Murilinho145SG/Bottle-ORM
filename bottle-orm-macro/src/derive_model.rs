@@ -241,15 +241,10 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                     // --------------------------------------------------------
                     // #[orm(foreign_key = "Table::Column")]
                     // --------------------------------------------------------
-                                        // Defines foreign key relationship
-                                        if meta.path.is_ident("foreign_key") {
-                                            // Validate that the field is an Option type.
-                                            // Foreign keys must be nullable (Option<T>) to handle cases where the relationship doesn't exist
-                                            // or to prevent infinite recursion in some data models.
-                                            if !is_nullable {
-                                                   return Err(meta.error("Invalid type for foreign_key. Type needs Option<type>"))
-                                            }
-                                            let value: syn::LitStr = meta.value()?.parse()?;                        let fk_string = value.value();
+                    // Defines foreign key relationship
+                    if meta.path.is_ident("foreign_key") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        let fk_string = value.value();
 
                         // Parse "Table::Column" format
                         let parts: Vec<&str> = fk_string.split("::").collect();
@@ -275,11 +270,10 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         // Apply Size Modifier to SQL Type
         // --------------------------------------------------------------------
         // If size attribute is present and type is TEXT, convert to VARCHAR(N)
-        if let Some(s) = size {
-            if sql_type == "TEXT" {
+        if let Some(s) = size
+            && sql_type == "TEXT" {
                 sql_type = format!("VARCHAR({})", s);
             }
-        }
 
         // --------------------------------------------------------------------
         // Generate ColumnInfo Token Stream

@@ -144,24 +144,20 @@ pub fn expand(input: DeriveInput) -> TokenStream {
 
 /// Checks if the given type is a DateTime type.
 fn is_datetime(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "DateTime" {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+            && segment.ident == "DateTime" {
                 return true;
             }
-        }
-    }
     false
 }
 
 /// Checks if the given type is a Uuid type.
 fn is_uuid(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Uuid" {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+            && segment.ident == "Uuid" {
                 return true;
             }
-        }
-    }
     false
 }

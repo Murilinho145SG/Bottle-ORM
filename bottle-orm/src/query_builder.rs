@@ -52,7 +52,7 @@ use sqlx::{
     any::{AnyArguments, AnyRow},
     Any, Arguments, Decode, Encode, FromRow, Row, Type,
 };
-use std::{fmt::format, marker::PhantomData};
+use std::marker::PhantomData;
 use uuid::Uuid;
 
 // ============================================================================
@@ -158,6 +158,9 @@ where
     /// Number of rows to skip (OFFSET)
     pub(crate) offset: Option<usize>,
 
+    /// Activate debug mode in query
+    pub(crate) debug_mode: bool,
+
     /// PhantomData to bind the generic type T
     pub(crate) _marker: PhantomData<&'a T>,
 }
@@ -203,6 +206,7 @@ where
             table_name,
             columns_info,
             columns,
+            debug_mode: false,
             select_columns: Vec::new(),
             where_clauses: Vec::new(),
             order_clauses: Vec::new(),
@@ -273,7 +277,7 @@ where
             } else {
                 query.push_str(&format!("\"{}\"", col));
             }
-            query.push_str(" ");
+            query.push(' ');
             query.push_str(op);
             query.push(' ');
 
@@ -367,8 +371,32 @@ where
     /// // Future usage example
     /// query.preload("posts").preload("comments")
     /// ```
-    pub fn preload(self) -> Self {
-        // TODO: Implement relationship preloading
+    // pub fn preload(self) -> Self {
+    //     // TODO: Implement relationship preloading
+    //     self
+    // }
+
+    /// Activates debug mode for this query.
+    ///
+    /// When enabled, the generated SQL query will be logged using the `log` crate
+    /// at the `DEBUG` level before execution.
+    ///
+    /// # Note
+    ///
+    /// To see the output, you must initialize a logger in your application (e.g., using `env_logger`)
+    /// and configure it to display `debug` logs for `bottle_orm`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.model::<User>()
+    ///     .filter("active", "=", true)
+    ///     .debug() // Logs SQL: SELECT * FROM "user" WHERE "active" = $1
+    ///     .scan()
+    ///     .await?;
+    /// ```
+    pub fn debug(mut self) -> Self {
+        self.debug_mode = true;
         self
     }
 
@@ -589,13 +617,13 @@ where
     ///
     /// db.model::<User>().insert(&new_user).await?;
     /// ```
-    pub async fn insert(&mut self, model: &T) -> Result<&Self, sqlx::Error> {
+    pub async fn insert(&mut self, model: &T) -> Result<(), sqlx::Error> {
         // Serialize model to a HashMap of column_name -> string_value
         let data_map = model.to_map();
 
         // Early return if no data to insert
         if data_map.is_empty() {
-            return Ok(self);
+            return Ok(());
         }
 
         let table_name = self.table_name.to_snake_case();
@@ -647,8 +675,10 @@ where
             placeholders.join(", ")
         );
 
-        // Debug: Uncomment to see generated SQL
-        // println!("{}", query_str);
+        // If debug mode is enabled, log the generated SQL query before execution
+        if self.debug_mode {
+            log::debug!("SQL: {}", query_str);
+        }
 
         let mut query = sqlx::query::<sqlx::Any>(&query_str);
 
@@ -742,7 +772,7 @@ where
 
         // Execute the INSERT query
         query.execute(self.tx.executor()).await?;
-        Ok(self)
+        Ok(())
     }
 
     // ========================================================================
@@ -829,12 +859,10 @@ where
                             } else {
                                 args.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake));
                             }
+                        } else if !self.joins_clauses.is_empty() {
+                            args.push(format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake));
                         } else {
-                            if !self.joins_clauses.is_empty() {
-                                args.push(format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake));
-                            } else {
-                                args.push(format!("\"{}\"", col_snake));
-                            }
+                            args.push(format!("\"{}\"", col_snake));
                         }
                     }
                 }
@@ -855,12 +883,10 @@ where
                             } else {
                                 format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake)
                             }
+                        } else if !self.joins_clauses.is_empty() {
+                            format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake)
                         } else {
-                            if !self.joins_clauses.is_empty() {
-                                format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake)
-                            } else {
-                                format!("\"{}\"", col_snake)
-                            }
+                            format!("\"{}\"", col_snake)
                         }
                     })
                     .collect();
@@ -974,6 +1000,11 @@ where
             let _ = args.add(offset as i64);
         }
 
+        // Print SQL query to logs if debug mode is active
+        if self.debug_mode {
+            log::debug!("SQL: {}", query);
+        }
+
         // Execute query and fetch all results
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(self.tx.executor()).await
     }
@@ -1073,6 +1104,11 @@ where
         // Always add LIMIT 1 for first() queries
         query.push_str(" LIMIT 1");
 
+        // Print SQL query to logs if debug mode is active
+        if self.debug_mode {
+            log::debug!("SQL: {}", query);
+        }
+
         // Execute query and fetch exactly one result
         sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(self.tx.executor()).await
     }
@@ -1154,6 +1190,11 @@ where
 
         // Always add LIMIT 1 for scalar queries
         query.push_str(" LIMIT 1");
+
+        // Print SQL query to logs if debug mode is active
+        if self.debug_mode {
+            log::debug!("SQL: {}", query);
+        }
 
         // Execute query and fetch one row
         let row = sqlx::query_with::<_, _>(&query, args).fetch_one(self.tx.executor()).await?;
@@ -1285,6 +1326,11 @@ where
             clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
         }
 
+        // Print SQL query to logs if debug mode is active
+        if self.debug_mode {
+            log::debug!("SQL: {}", query);
+        }
+
         // Execute the UPDATE query
         let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
 
@@ -1307,6 +1353,11 @@ where
 
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
+        }
+
+        // Print SQL query to logs if debug mode is active
+        if self.debug_mode {
+            log::debug!("SQL: {}", query);
         }
 
         let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;

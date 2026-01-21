@@ -1,6 +1,6 @@
 [package]
 name = "bottle-orm"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = ["Murilinho145SG"]
 description = "A lightweight and simple ORM for Rust built on top of sqlx"
@@ -24,6 +24,8 @@ heck = "0.5.0"
 serde = "1.0.228"
 thiserror = "2.0.18"
 uuid = { version = "1.11", features = ["v1", "v3", "v4", "v5", "v6", "v7", "serde"] }
+log = "0.4.29"
 
 [dev-dependencies]
+env_logger = "0.11.8"
 tokio = { version = "1.0", features = ["full"] }
