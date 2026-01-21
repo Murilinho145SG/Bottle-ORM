@@ -39,8 +39,6 @@ pub fn expand(input: DeriveInput) -> TokenStream {
         
         // Special handling for DateTime fields: parse from string
         if is_datetime(field_type) {
-            dbg!(&column_name);
-            dbg!(&field_type);
             quote! {
                 let #field_name: #field_type = {
                      let s: String = row.try_get(#column_name).map_err(|e| sqlx::Error::ColumnDecode {
@@ -49,6 +47,19 @@ pub fn expand(input: DeriveInput) -> TokenStream {
                     })?;
 
                      s.parse::<chrono::DateTime<chrono::Utc>>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+                };
+            }
+        } else if is_uuid(field_type) {
+            // Special handling for Uuid fields: parse from string
+            // UUIDs are typically returned as strings from the database when using AnyRow
+            quote! {
+                let #field_name: #field_type = {
+                     let s: String = row.try_get(#column_name).map_err(|e| sqlx::Error::ColumnDecode {
+                        index: #column_name.to_string(),
+                        source: Box::new(e)
+                    })?;
+
+                     s.parse::<uuid::Uuid>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
                 };
             }
         } else {
@@ -136,6 +147,18 @@ fn is_datetime(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
             if segment.ident == "DateTime" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Checks if the given type is a Uuid type.
+fn is_uuid(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Uuid" {
                 return true;
             }
         }

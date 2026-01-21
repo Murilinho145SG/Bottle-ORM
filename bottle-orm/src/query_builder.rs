@@ -52,7 +52,7 @@ use sqlx::{
     any::{AnyArguments, AnyRow},
     Any, Arguments, Decode, Encode, FromRow, Row, Type,
 };
-use std::marker::PhantomData;
+use std::{fmt::format, marker::PhantomData};
 use uuid::Uuid;
 
 // ============================================================================
@@ -267,9 +267,13 @@ where
         V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
     {
         let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
-            query.push_str(" AND \"");
-            query.push_str(col);
-            query.push_str("\" ");
+            query.push_str(" AND ");
+            if let Some((table, column)) = col.split_once(".") {
+                query.push_str(&format!("\"{}\".\"{}\"", table, column));
+            } else {
+                query.push_str(&format!("\"{}\"", col));
+            }
+            query.push_str(" ");
             query.push_str(op);
             query.push(' ');
 
@@ -378,11 +382,20 @@ where
     /// Will support various types of JOINs (INNER, LEFT, RIGHT, FULL):
     ///
     /// ```rust,ignore
-    /// // Future usage example
+    /// Adds a JOIN clause to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `table` - The name of the table to join.
+    /// * `s_query` - The ON clause condition (e.g., "users.id = posts.user_id").
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
     /// query.join("posts", "users.id = posts.user_id")
     /// ```
-    pub fn join(self) -> Self {
-        // TODO: Implement JOIN operations
+    pub fn join(mut self, table: &str, s_query: &str) -> Self {
+        self.joins_clauses.push(format!("JOIN {} ON {}", table, s_query));
         self
     }
 
@@ -806,9 +819,22 @@ where
                     let sql_type = col_info.sql_type;
                     if self.select_columns.contains(&col_snake) {
                         if is_temporal_type(sql_type) {
-                            args.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake));
+                            if !self.joins_clauses.is_empty() {
+                                args.push(format!(
+                                    "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                    self.table_name.to_snake_case(),
+                                    col_snake,
+                                    col_snake
+                                ));
+                            } else {
+                                args.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake));
+                            }
                         } else {
-                            args.push(format!("\"{}\"", col_snake));
+                            if !self.joins_clauses.is_empty() {
+                                args.push(format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake));
+                            } else {
+                                args.push(format!("\"{}\"", col_snake));
+                            }
                         }
                     }
                 }
@@ -819,9 +845,22 @@ where
                     .map(|c| {
                         let col_snake = c.column.to_snake_case();
                         if is_temporal_type(c.sql_type) {
-                            format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake)
+                            if !self.joins_clauses.is_empty() {
+                                format!(
+                                    "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                    self.table_name.to_snake_case(),
+                                    col_snake,
+                                    col_snake
+                                )
+                            } else {
+                                format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake)
+                            }
                         } else {
-                            format!("\"{}\"", col_snake)
+                            if !self.joins_clauses.is_empty() {
+                                format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake)
+                            } else {
+                                format!("\"{}\"", col_snake)
+                            }
                         }
                     })
                     .collect();
@@ -888,7 +927,12 @@ where
         // Build FROM clause
         query.push_str(" FROM \"");
         query.push_str(&self.table_name.to_snake_case());
-        query.push_str("\" WHERE 1=1");
+        query.push_str("\" ");
+        if !self.joins_clauses.is_empty() {
+            query.push_str(&self.joins_clauses.join(" "));
+        }
+
+        query.push_str(" WHERE 1=1");
 
         // Apply WHERE clauses
         let mut args = AnyArguments::default();
@@ -994,7 +1038,12 @@ where
         // Build FROM clause
         query.push_str(" FROM \"");
         query.push_str(&self.table_name.to_snake_case());
-        query.push_str("\" WHERE 1=1");
+        query.push_str("\" ");
+        if !self.joins_clauses.is_empty() {
+            query.push_str(&self.joins_clauses.join(" "));
+        }
+
+        query.push_str(" WHERE 1=1");
 
         // Apply WHERE clauses
         let mut args = AnyArguments::default();
@@ -1016,9 +1065,9 @@ where
             query.push_str(&format!(" ORDER BY {}", self.order_clauses.join(", ")));
         } else if let Some(pk) = pk_column {
             // Fallback to PK ordering if no custom order is specified (ensures deterministic results)
-            query.push_str(" ORDER BY \"");
-            query.push_str(&pk);
-            query.push_str("\" ASC");
+            query.push_str(" ORDER BY ");
+            query.push_str(&format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), pk));
+            query.push_str(" ASC");
         }
 
         // Always add LIMIT 1 for first() queries
@@ -1064,12 +1113,31 @@ where
             return Err(sqlx::Error::ColumnNotFound("is not possible get data without column".to_string()));
         }
 
-        query.push_str(&self.select_columns.join(", "));
+        let mut select_cols = Vec::with_capacity(self.select_columns.capacity());
+        for col in self.select_columns {
+            if !self.joins_clauses.is_empty() {
+                if let Some((table, column)) = col.split_once(".") {
+                    select_cols.push(format!("\"{}\".\"{}\"", table, column));
+                } else {
+                    select_cols.push(format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col));
+                }
+                continue;
+            }
+            select_cols.push(col);
+        }
+
+        query.push_str(&select_cols.join(", "));
 
         // Build FROM clause
         query.push_str(" FROM \"");
         query.push_str(&self.table_name.to_snake_case());
-        query.push_str("\" WHERE 1=1");
+        query.push_str("\" ");
+
+        if !self.joins_clauses.is_empty() {
+            query.push_str(&self.joins_clauses.join(" "));
+        }
+
+        query.push_str(" WHERE 1=1");
 
         // Apply WHERE clauses
         let mut args = AnyArguments::default();
@@ -1207,28 +1275,18 @@ where
 
         // Bind SET values
         for (val_str, sql_type) in bindings {
-            if args
-                .bind_value(&val_str, sql_type, &self.tx.driver())
-                .is_err()
-            {
+            if args.bind_value(&val_str, sql_type, &self.tx.driver()).is_err() {
                 let _ = args.add(val_str);
             }
         }
 
         // Apply WHERE clauses (appending to args and query)
         for clause in &self.where_clauses {
-            clause(
-                &mut query,
-                &mut args,
-                &self.tx.driver(),
-                &mut arg_counter,
-            );
+            clause(&mut query, &mut args, &self.tx.driver(), &mut arg_counter);
         }
 
         // Execute the UPDATE query
-        let result = sqlx::query_with(&query, args)
-            .execute(self.tx.executor())
-            .await?;
+        let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
 
         Ok(result.rows_affected())
     }

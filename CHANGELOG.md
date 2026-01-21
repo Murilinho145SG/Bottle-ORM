@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-21
+
+### Added
+- **JOIN Support**: Implemented `join()` method in `QueryBuilder` to allow table joins.
+  - Added support for qualified column names (e.g., `table.column`) in select and filter clauses to prevent ambiguity.
+- **UUID Support**: Added direct support for parsing `Uuid` types in `FromAnyRow` derive macro.
+
+### Changed
+- **Foreign Key Validation**: Now enforces `Option<T>` type for fields annotated with `#[foreign_key]` to ensure correct nullability handling.
+
+### Fixed
+- **Query Builder**: Resolved column ambiguity issues in SQL generation when using joins.
+- **Cleanup**: Removed debug print statements from `scalar` query execution.
+
 ## [0.2.2-rc.3] - 2026-01-20
 
 ### Added
