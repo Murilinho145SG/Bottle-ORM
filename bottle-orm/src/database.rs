@@ -45,6 +45,7 @@
 // External Crate Imports
 // ============================================================================
 
+use std::time::Duration;
 use heck::ToSnakeCase;
 use sqlx::{any::AnyPoolOptions, AnyPool, Error, Row};
 
@@ -128,6 +129,79 @@ pub enum Drivers {
 }
 
 // ============================================================================
+// Database Builder
+// ============================================================================
+
+/// A builder for creating a `Database` connection with custom options.
+///
+/// Allows configuration of connection pool settings such as maximum connections,
+/// timeouts, and lifetimes.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let db = Database::builder()
+///     .max_connections(10)
+///     .min_connections(2)
+///     .acquire_timeout(std::time::Duration::from_secs(5))
+///     .connect("postgres://...")
+///     .await?;
+/// ```
+pub struct DatabaseBuilder {
+    options: AnyPoolOptions,
+}
+
+impl DatabaseBuilder {
+    /// Sets the maximum number of connections that this pool should maintain.
+    pub fn max_connections(mut self, max: u32) -> Self {
+        self.options = self.options.max_connections(max);
+        self
+    }
+
+    /// Sets the minimum number of connections that this pool should maintain.
+    pub fn min_connections(mut self, min: u32) -> Self {
+        self.options = self.options.min_connections(min);
+        self
+    }
+
+    /// Sets the maximum amount of time to spend waiting for a connection.
+    pub fn acquire_timeout(mut self, timeout: Duration) -> Self {
+        self.options = self.options.acquire_timeout(timeout);
+        self
+    }
+
+    /// Sets the maximum amount of time a connection may be idle.
+    pub fn idle_timeout(mut self, timeout: Duration) -> Self {
+        self.options = self.options.idle_timeout(Some(timeout));
+        self
+    }
+
+    /// Sets the maximum lifetime of a connection.
+    pub fn max_lifetime(mut self, lifetime: Duration) -> Self {
+        self.options = self.options.max_lifetime(Some(lifetime));
+        self
+    }
+
+    /// Connects to the database using the configured options.
+    pub async fn connect(self, url: &str) -> Result<Database, Error> {
+        // Install default drivers for sqlx::Any
+        sqlx::any::install_default_drivers();
+
+        let pool = self.options.connect(url).await?;
+
+        // Detect driver type from URL scheme
+        let (driver_str, _) = url.split_once(':').unwrap_or(("sqlite", ""));
+        let driver = match driver_str {
+            "postgresql" | "postgres" => Drivers::Postgres,
+            "mysql" => Drivers::MySQL,
+            _ => Drivers::SQLite,
+        };
+
+        Ok(Database { pool, driver })
+    }
+}
+
+// ============================================================================
 // Database Connection and Management
 // ============================================================================
 
@@ -198,6 +272,25 @@ impl Database {
     // Connection Management
     // ========================================================================
 
+    /// Creates a builder to configure the database connection options.
+    ///
+    /// Returns a `DatabaseBuilder` which allows setting pool options like
+    /// `max_connections`, timeouts, etc.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let db = Database::builder()
+    ///     .max_connections(20)
+    ///     .connect("postgres://...")
+    ///     .await?;
+    /// ```
+    pub fn builder() -> DatabaseBuilder {
+        DatabaseBuilder {
+            options: AnyPoolOptions::new(),
+        }
+    }
+
     /// Connects to the database using a connection string (Database URL).
     ///
     /// This method establishes a connection pool to the specified database and
@@ -254,21 +347,7 @@ impl Database {
     /// }
     /// ```
     pub async fn connect(url: &str) -> Result<Self, Error> {
-        // Install default drivers for sqlx::Any
-        sqlx::any::install_default_drivers();
-
-        // Create connection pool with maximum 5 connections
-        let pool = AnyPoolOptions::new().max_connections(5).connect(url).await?;
-
-        // Detect driver type from URL scheme
-        let (driver_str, _) = url.split_once(':').unwrap_or(("sqlite", ""));
-        let driver = match driver_str {
-            "postgresql" | "postgres" => Drivers::Postgres,
-            "mysql" => Drivers::MySQL,
-            _ => Drivers::SQLite,
-        };
-
-        Ok(Self { pool, driver })
+        Self::builder().max_connections(5).connect(url).await
     }
 
     // ========================================================================
