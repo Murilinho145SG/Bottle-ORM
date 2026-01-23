@@ -335,7 +335,24 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     });
 
     // ========================================================================
-    // Generate Complete Model Implementation
+    // Generate AnyInfo Column Definitions
+    // ========================================================================
+    // Simplified metadata for AnyImpl trait (used in scanning/pagination)
+    let any_column_defs = fields.named.iter().map(|f| {
+        let field_name = &f.ident;
+        let field_type = &f.ty;
+        let (sql_type, _) = rust_type_to_sql(field_type);
+
+        quote! {
+            bottle_orm::AnyInfo {
+                column: stringify!(#field_name),
+                sql_type: #sql_type,
+            }
+        }
+    });
+
+    // ========================================================================
+    // Generate Complete Model & AnyImpl Implementation
     // ========================================================================
 
     quote! {
@@ -370,6 +387,16 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                 let mut map = std::collections::HashMap::new();
                  #(#map_inserts)*
                   map
+            }
+        }
+
+        impl bottle_orm::AnyImpl for #struct_name {
+            fn columns() -> Vec<bottle_orm::AnyInfo> {
+                vec![#(#any_column_defs),*]
+            }
+
+            fn to_map(&self) -> std::collections::HashMap<String, String> {
+                bottle_orm::Model::to_map(self)
             }
         }
     }
