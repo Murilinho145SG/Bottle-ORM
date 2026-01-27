@@ -89,13 +89,7 @@ macro_rules! impl_any_primitive {
     };
 }
 
-impl_any_primitive!(
-    bool,
-    i8, i16, i32, i64, isize,
-    u8, u16, u32, u64, usize,
-    f32, f64,
-    String
-);
+impl_any_primitive!(bool, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64, String);
 
 // ============================================================================
 // External Type Implementations

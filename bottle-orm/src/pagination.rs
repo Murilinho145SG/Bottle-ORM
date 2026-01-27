@@ -30,8 +30,8 @@
 //! }
 //! ```
 
-use serde::{Deserialize, Serialize};
 use crate::{database::Connection, model::Model, query_builder::QueryBuilder, AnyImpl};
+use serde::{Deserialize, Serialize};
 use sqlx::{any::AnyRow, FromRow, Row};
 
 /// A standard pagination structure.
@@ -72,10 +72,7 @@ fn default_limit() -> usize {
 
 impl Default for Pagination {
     fn default() -> Self {
-        Self {
-            page: 0,
-            limit: 10,
-        }
+        Self { page: 0, limit: 10 }
     }
 }
 
@@ -127,7 +124,7 @@ impl Pagination {
     /// ```rust,ignore
     /// let pagination = Pagination::new(0, 10);
     /// let result = pagination.paginate(db.model::<User>()).await?;
-    /// 
+    ///
     /// println!("Total users: {}", result.total);
     /// for user in result.data {
     ///     println!("User: {}", user.username);
@@ -143,8 +140,8 @@ impl Pagination {
         // We temporarily replace selected columns with COUNT(*) and remove order/limit/offset
         let original_select = query.select_columns.clone();
         let original_order = query.order_clauses.clone();
-        let original_limit = query.limit;
-        let original_offset = query.offset;
+        let _original_limit = query.limit;
+        let _original_offset = query.offset;
 
         query.select_columns = vec!["COUNT(*)".to_string()];
         query.order_clauses.clear();
@@ -154,13 +151,13 @@ impl Pagination {
         // 2. Generate and Execute Count SQL
         // We cannot use query.scalar() easily because it consumes self.
         // We use query.to_sql() and construct a manual query execution using the builder's state.
-        
+
         let count_sql = query.to_sql();
-        
+
         // We need to re-bind arguments. This logic mirrors QueryBuilder::scan
         let mut args = sqlx::any::AnyArguments::default();
         let mut arg_counter = 1;
-        
+
         // Re-bind arguments for count query
         // Note: We access internal fields of QueryBuilder. This assumes this module is part of the crate.
         // If WHERE clauses are complex, this manual reconstruction is necessary.
@@ -169,16 +166,14 @@ impl Pagination {
             clause(&mut dummy_query, &mut args, &query.driver, &mut arg_counter);
         }
         if !query.having_clauses.is_empty() {
-             for clause in &query.having_clauses {
+            for clause in &query.having_clauses {
                 clause(&mut dummy_query, &mut args, &query.driver, &mut arg_counter);
             }
         }
 
         // Execute count query
-        let count_row = sqlx::query_with::<_, _>(&count_sql, args)
-            .fetch_one(query.tx.executor())
-            .await?;
-            
+        let count_row = sqlx::query_with::<_, _>(&count_sql, args).fetch_one(query.tx.executor()).await?;
+
         let total: i64 = count_row.try_get(0)?;
 
         // 3. Restore Query State for Data Fetch
@@ -195,12 +190,6 @@ impl Pagination {
         // 5. Calculate Metadata
         let total_pages = (total as f64 / self.limit as f64).ceil() as i64;
 
-        Ok(Paginated {
-            data,
-            total,
-            page: self.page,
-            limit: self.limit,
-            total_pages,
-        })
+        Ok(Paginated { data, total, page: self.page, limit: self.limit, total_pages })
     }
 }

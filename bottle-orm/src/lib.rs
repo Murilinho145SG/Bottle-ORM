@@ -131,7 +131,7 @@ pub mod pagination;
 ///
 /// This is the main entry point for establishing database connections
 /// and creating query builders or migrators.
-pub use database::{Database, DatabaseBuilder};
+pub use database::{Database, DatabaseBuilder, RawQuery};
 
 /// Re-export of the `Model` trait and `ColumnInfo` struct.
 ///

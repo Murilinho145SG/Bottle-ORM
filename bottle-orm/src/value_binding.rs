@@ -13,11 +13,11 @@
 //! - **Error Handling**: Graceful fallback for parsing errors
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use sqlx::Arguments;
 use sqlx::any::AnyArguments;
+use sqlx::Arguments;
 use uuid::Uuid;
 
-use crate::{Error, database::Drivers, temporal};
+use crate::{database::Drivers, temporal, Error};
 
 // ============================================================================
 // Value Binding Trait
@@ -81,34 +81,37 @@ impl ValueBinder for AnyArguments<'_> {
             "INTEGER" | "INT" | "SERIAL" | "serial" | "int4" => {
                 // Try parsing as i32 first, fallback to u32/i64 if needed but sql_type says INTEGER
                 if let Ok(val) = value_str.parse::<i32>() {
-                     self.bind_i32(val);
+                    self.bind_i32(val);
                 } else if let Ok(val) = value_str.parse::<u32>() {
-                     self.bind_i64(val as i64); // Map u32 to i64 to fit
+                    self.bind_i64(val as i64); // Map u32 to i64 to fit
                 } else {
-                     return Err(Error::Conversion(format!("Failed to parse integer: {}", value_str)));
+                    return Err(Error::Conversion(format!("Failed to parse integer: {}", value_str)));
                 }
                 Ok(())
             }
 
             "BIGINT" | "INT8" | "int8" | "BIGSERIAL" => {
-                 if let Ok(val) = value_str.parse::<i64>() {
+                if let Ok(val) = value_str.parse::<i64>() {
                     self.bind_i64(val);
-                 } else if let Ok(val) = value_str.parse::<u64>() {
+                } else if let Ok(_val) = value_str.parse::<u64>() {
                     // u64 might overflow i64, strictly speaking, but standard mapping in rust sqlx usually handles i64
-                    // We'll try to bind as i64 (unsafe cast) or string? 
+                    // We'll try to bind as i64 (unsafe cast) or string?
                     // Best effort: bind as i64 (reinterpreting bits or clamping? No, let's just parse)
                     // If it exceeds i64::MAX, it's an issue for standard SQL BIGINT (signed).
                     // For now, parse as i64.
-                     let val = value_str.parse::<i64>().map_err(|e| Error::Conversion(format!("Failed to parse i64: {}", e)))?;
-                     self.bind_i64(val);
-                 } else {
+                    let val = value_str
+                        .parse::<i64>()
+                        .map_err(|e| Error::Conversion(format!("Failed to parse i64: {}", e)))?;
+                    self.bind_i64(val);
+                } else {
                     return Err(Error::Conversion(format!("Failed to parse i64: {}", value_str)));
-                 }
+                }
                 Ok(())
             }
 
             "SMALLINT" | "INT2" | "int2" => {
-                let val: i16 = value_str.parse().map_err(|e| Error::Conversion(format!("Failed to parse i16: {}", e)))?;
+                let val: i16 =
+                    value_str.parse().map_err(|e| Error::Conversion(format!("Failed to parse i16: {}", e)))?;
                 let _ = self.add(val);
                 Ok(())
             }
@@ -132,11 +135,11 @@ impl ValueBinder for AnyArguments<'_> {
                 self.bind_f64(val);
                 Ok(())
             }
-            
+
             "REAL" | "float4" => {
                 let val: f32 =
                     value_str.parse().map_err(|e| Error::Conversion(format!("Failed to parse f32: {}", e)))?;
-                 let _ = self.add(val);
+                let _ = self.add(val);
                 Ok(())
             }
 
@@ -181,7 +184,7 @@ impl ValueBinder for AnyArguments<'_> {
                     // Fallback to FixedOffset if UTC fails (though parse_datetime_utc handles fixed too)
                     self.bind_datetime_fixed(val, driver);
                 } else {
-                     return Err(Error::Conversion(format!("Failed to parse DateTime: {}", value_str)));
+                    return Err(Error::Conversion(format!("Failed to parse DateTime: {}", value_str)));
                 }
                 Ok(())
             }

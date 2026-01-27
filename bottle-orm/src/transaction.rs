@@ -36,11 +36,9 @@ use heck::ToSnakeCase;
 // ============================================================================
 
 use crate::{
-    any_struct::AnyImpl,
-    database::{Connection, Drivers},
+    database::{Connection, Drivers, RawQuery},
     Model, QueryBuilder,
 };
-use sqlx::{any::AnyRow, FromRow};
 
 // ============================================================================
 // Transaction Struct
@@ -75,7 +73,8 @@ pub struct Transaction<'a> {
 /// Supports generic borrow lifetimes to allow multiple operations within
 /// the same transaction scope.
 impl<'a> Connection for Transaction<'a> {
-    type Exec<'c> = &'c mut sqlx::AnyConnection
+    type Exec<'c>
+        = &'c mut sqlx::AnyConnection
     where
         Self: 'c;
 
@@ -86,7 +85,8 @@ impl<'a> Connection for Transaction<'a> {
 
 /// Implementation of Connection for a mutable reference to Transaction.
 impl<'a, 'b> Connection for &'a mut Transaction<'b> {
-    type Exec<'c> = &'c mut sqlx::AnyConnection
+    type Exec<'c>
+        = &'c mut sqlx::AnyConnection
     where
         Self: 'c;
 
@@ -128,7 +128,9 @@ impl<'a> Transaction<'a> {
     ///
     /// tx.commit().await?;
     /// ```
-    pub fn model<T: Model + Send + Sync + Unpin>(&mut self) -> QueryBuilder<'a, T, &mut sqlx::Transaction<'a, sqlx::Any>> {
+    pub fn model<T: Model + Send + Sync + Unpin>(
+        &mut self,
+    ) -> QueryBuilder<'a, T, &mut sqlx::Transaction<'a, sqlx::Any>> {
         // Get active column names from the model
         let active_columns = T::active_columns();
         let mut columns: Vec<String> = Vec::with_capacity(active_columns.capacity());
@@ -140,6 +142,35 @@ impl<'a> Transaction<'a> {
 
         // Create and return the query builder
         QueryBuilder::new(&mut self.tx, self.driver, T::table_name(), T::columns(), columns)
+    }
+
+    /// Creates a raw SQL query builder attached to this transaction.
+    ///
+    /// Allows executing raw SQL queries that participate in the current transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The raw SQL query string
+    ///
+    /// # Returns
+    ///
+    /// A `RawQuery` builder bound to this transaction.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut tx = db.begin().await?;
+    ///
+    /// // Execute raw SQL inside transaction
+    /// tx.raw("INSERT INTO logs (msg) VALUES ($1)")
+    ///     .bind("Transaction started")
+    ///     .execute()
+    ///     .await?;
+    ///
+    /// tx.commit().await?;
+    /// ```
+    pub fn raw<'b>(&'b mut self, sql: &'b str) -> RawQuery<'b, &'b mut Transaction<'a>> {
+        RawQuery::new(self, sql)
     }
 
     // ========================================================================

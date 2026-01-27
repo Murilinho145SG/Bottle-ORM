@@ -45,9 +45,12 @@
 // External Crate Imports
 // ============================================================================
 
-use std::time::Duration;
 use heck::ToSnakeCase;
-use sqlx::{AnyPool, Arguments, Error, Row, any::{AnyArguments, AnyPoolOptions}};
+use sqlx::{
+    any::{AnyArguments, AnyPoolOptions},
+    AnyPool, Arguments, Error, Row,
+};
+use std::time::Duration;
 
 // ============================================================================
 // Internal Crate Imports
@@ -286,9 +289,7 @@ impl Database {
     ///     .await?;
     /// ```
     pub fn builder() -> DatabaseBuilder {
-        DatabaseBuilder {
-            options: AnyPoolOptions::new(),
-        }
+        DatabaseBuilder { options: AnyPoolOptions::new() }
     }
 
     /// Connects to the database using a connection string (Database URL).
@@ -470,8 +471,8 @@ impl Database {
     ///     .execute()
     ///     .await?;
     /// ```
-    pub fn raw<'a>(&'a self, sql: &'a str) -> RawQuery<'a> {
-        RawQuery::new(self, sql)
+    pub fn raw<'a>(&'a self, sql: &'a str) -> RawQuery<'a, Self> {
+        RawQuery::new(self.clone(), sql)
     }
 
     // ========================================================================
@@ -743,19 +744,14 @@ impl Database {
                 // Check if constraint already exists
                 let count: i64 = match self.driver {
                     Drivers::Postgres => {
-                        let check_query = "SELECT count(*) FROM information_schema.table_constraints WHERE constraint_name = $1";
-                        let row = sqlx::query(check_query)
-                            .bind(&constraint_name)
-                            .fetch_one(&self.pool)
-                            .await?;
+                        let check_query =
+                            "SELECT count(*) FROM information_schema.table_constraints WHERE constraint_name = $1";
+                        let row = sqlx::query(check_query).bind(&constraint_name).fetch_one(&self.pool).await?;
                         row.try_get(0).unwrap_or(0)
                     }
                     Drivers::MySQL => {
                         let check_query = "SELECT count(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME = ? AND TABLE_SCHEMA = DATABASE()";
-                        let row = sqlx::query(check_query)
-                            .bind(&constraint_name)
-                            .fetch_one(&self.pool)
-                            .await?;
+                        let row = sqlx::query(check_query).bind(&constraint_name).fetch_one(&self.pool).await?;
                         row.try_get(0).unwrap_or(0)
                     }
                     Drivers::SQLite => 0, // Unreachable
@@ -815,7 +811,8 @@ impl Connection for Database {
 
 /// Implementation of Connection for a mutable reference to Database.
 impl<'a> Connection for &'a mut Database {
-    type Exec<'c> = &'c sqlx::Pool<sqlx::Any>
+    type Exec<'c>
+        = &'c sqlx::Pool<sqlx::Any>
     where
         Self: 'c;
 
@@ -826,7 +823,8 @@ impl<'a> Connection for &'a mut Database {
 
 /// Implementation of Connection for a mutable reference to sqlx::Transaction.
 impl<'a> Connection for &mut sqlx::Transaction<'a, sqlx::Any> {
-    type Exec<'c> = &'c mut sqlx::AnyConnection
+    type Exec<'c>
+        = &'c mut sqlx::AnyConnection
     where
         Self: 'c;
 
@@ -836,84 +834,112 @@ impl<'a> Connection for &mut sqlx::Transaction<'a, sqlx::Any> {
 }
 
 // ============================================================================
+
 // Raw SQL Query Builder
+
 // ============================================================================
 
 /// A builder for executing raw SQL queries with parameter binding.
+
 ///
-/// Returned by `Database::raw()`. Allows constructing safe, parameterized
+
+/// Returned by `Database::raw()` or `Transaction::raw()`. Allows constructing safe, parameterized
+
 /// SQL queries that can bypass the standard model-based QueryBuilder when
+
 /// complex SQL features (CTEs, Window Functions, etc.) are needed.
-pub struct RawQuery<'a> {
-    db: &'a Database,
+
+pub struct RawQuery<'a, C> {
+    conn: C,
+
     sql: &'a str,
+
     args: AnyArguments<'a>,
 }
 
-impl<'a> RawQuery<'a> {
+impl<'a, C> RawQuery<'a, C>
+where
+    C: Connection + Send,
+{
     /// Creates a new RawQuery instance.
-    pub(crate) fn new(db: &'a Database, sql: &'a str) -> Self {
-        Self {
-            db,
-            sql,
-            args: AnyArguments::default(),
-        }
+
+    pub(crate) fn new(conn: C, sql: &'a str) -> Self {
+        Self { conn, sql, args: AnyArguments::default() }
     }
 
     /// Binds a parameter to the query.
+
     ///
+
     /// # Arguments
+
     ///
+
     /// * `value` - The value to bind. Must implement `sqlx::Encode` and `sqlx::Type`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// db.raw("SELECT * FROM users WHERE age > $1 AND active = $2")
-    ///     .bind(18)
-    ///     .bind(true)
-    ///     .fetch_all::<User>()
-    ///     .await?;
-    /// ```
+
     pub fn bind<T>(mut self, value: T) -> Self
     where
         T: 'a + sqlx::Encode<'a, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Sync,
     {
         let _ = self.args.add(value);
+
         self
     }
 
     /// Executes the query and returns all matching rows mapped to type `T`.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `T` - The result type. Must implement `sqlx::FromRow`.
-    pub async fn fetch_all<T>(self) -> Result<Vec<T>, Error>
+
+    pub async fn fetch_all<T>(mut self) -> Result<Vec<T>, Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
     {
-        sqlx::query_as_with::<_, T, _>(self.sql, self.args)
-            .fetch_all(&self.db.pool)
-            .await
+        sqlx::query_as_with::<_, T, _>(self.sql, self.args).fetch_all(self.conn.executor()).await
     }
 
     /// Executes the query and returns the first matching row mapped to type `T`.
-    ///
-    /// Returns `sqlx::Error::RowNotFound` if no results are found.
-    pub async fn fetch_one<T>(self) -> Result<T, Error>
+
+    pub async fn fetch_one<T>(mut self) -> Result<T, Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
     {
-        sqlx::query_as_with::<_, T, _>(self.sql, self.args)
-            .fetch_one(&self.db.pool)
-            .await
+        sqlx::query_as_with::<_, T, _>(self.sql, self.args).fetch_one(self.conn.executor()).await
+    }
+
+    /// Executes the query and returns the first matching row, or None if not found.
+
+    pub async fn fetch_optional<T>(mut self) -> Result<Option<T>, Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
+    {
+        sqlx::query_as_with::<_, T, _>(self.sql, self.args).fetch_optional(self.conn.executor()).await
+    }
+
+    /// Executes the query and returns a single scalar value.
+
+    ///
+
+    /// Useful for queries like `SELECT count(*) ...` or `SELECT id ...`.
+
+    pub async fn fetch_scalar<O>(mut self) -> Result<O, Error>
+    where
+        O: for<'r> sqlx::Decode<'r, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Unpin,
+    {
+        sqlx::query_scalar_with::<_, O, _>(self.sql, self.args).fetch_one(self.conn.executor()).await
+    }
+
+    /// Executes the query and returns a single scalar value, or None if not found.
+
+    pub async fn fetch_scalar_optional<O>(mut self) -> Result<Option<O>, Error>
+    where
+        O: for<'r> sqlx::Decode<'r, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Unpin,
+    {
+        sqlx::query_scalar_with::<_, O, _>(self.sql, self.args).fetch_optional(self.conn.executor()).await
     }
 
     /// Executes the query (INSERT, UPDATE, DELETE) and returns the number of affected rows.
-    pub async fn execute(self) -> Result<u64, Error> {
-        let result = sqlx::query_with(self.sql, self.args)
-            .execute(&self.db.pool)
-            .await?;
+
+    pub async fn execute(mut self) -> Result<u64, Error> {
+        let result = sqlx::query_with(self.sql, self.args).execute(self.conn.executor()).await?;
+
         Ok(result.rows_affected())
     }
 }
