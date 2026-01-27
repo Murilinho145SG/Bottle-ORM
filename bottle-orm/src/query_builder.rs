@@ -50,8 +50,8 @@
 use futures::future::BoxFuture;
 use heck::ToSnakeCase;
 use sqlx::{
-    any::{AnyArguments, AnyRow},
     Any, Arguments, Decode, Encode, FromRow, Row, Type,
+    any::{AnyArguments, AnyRow},
 };
 use std::marker::PhantomData;
 use uuid::Uuid;
@@ -61,11 +61,11 @@ use uuid::Uuid;
 // ============================================================================
 
 use crate::{
+    AnyImpl, Error,
     database::{Connection, Drivers},
     model::{ColumnInfo, Model},
     temporal::{self, is_temporal_type},
     value_binding::ValueBinder,
-    AnyImpl, Error,
 };
 
 // ============================================================================
@@ -1203,7 +1203,7 @@ where
                     let col_snake = col_info.column.to_snake_case();
                     let sql_type = col_info.sql_type;
                     if self.select_columns.contains(&col_snake) {
-                        if is_temporal_type(sql_type) {
+                        if is_temporal_type(sql_type) && matches!(self.driver, Drivers::Postgres) {
                             if !self.joins_clauses.is_empty() {
                                 args.push(format!(
                                     "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
@@ -1227,7 +1227,7 @@ where
                     .iter()
                     .map(|c| {
                         let col_snake = c.column.to_snake_case();
-                        if is_temporal_type(c.sql_type) {
+                        if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
                             if !self.joins_clauses.is_empty() {
                                 format!(
                                     "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
