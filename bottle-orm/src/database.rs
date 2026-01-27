@@ -47,7 +47,7 @@
 
 use std::time::Duration;
 use heck::ToSnakeCase;
-use sqlx::{any::AnyPoolOptions, AnyPool, Error, Row};
+use sqlx::{AnyPool, Arguments, Error, Row, any::{AnyArguments, AnyPoolOptions}};
 
 // ============================================================================
 // Internal Crate Imports
@@ -441,6 +441,39 @@ impl Database {
         QueryBuilder::new(self.clone(), self.driver, T::table_name(), T::columns(), columns)
     }
 
+    /// Creates a raw SQL query builder.
+    ///
+    /// This provides a "safety hatch" to execute raw SQL queries when the fluent
+    /// QueryBuilder is not sufficient (e.g., complex joins, CTEs, specific DB features).
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The raw SQL query string (use `$1`, `?`, etc. for placeholders based on driver)
+    ///
+    /// # Returns
+    ///
+    /// A `RawQuery` builder that allows binding parameters and executing the query.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Fetching complex data
+    /// let users: Vec<User> = db.raw("SELECT * FROM users WHERE age > $1")
+    ///     .bind(18)
+    ///     .fetch_all()
+    ///     .await?;
+    ///
+    /// // Executing an update
+    /// let affected = db.raw("UPDATE users SET active = $1 WHERE last_login < $2")
+    ///     .bind(false)
+    ///     .bind(one_year_ago)
+    ///     .execute()
+    ///     .await?;
+    /// ```
+    pub fn raw<'a>(&'a self, sql: &'a str) -> RawQuery<'a> {
+        RawQuery::new(self, sql)
+    }
+
     // ========================================================================
     // Table Creation
     // ========================================================================
@@ -799,5 +832,88 @@ impl<'a> Connection for &mut sqlx::Transaction<'a, sqlx::Any> {
 
     fn executor<'c>(&'c mut self) -> Self::Exec<'c> {
         &mut **self
+    }
+}
+
+// ============================================================================
+// Raw SQL Query Builder
+// ============================================================================
+
+/// A builder for executing raw SQL queries with parameter binding.
+///
+/// Returned by `Database::raw()`. Allows constructing safe, parameterized
+/// SQL queries that can bypass the standard model-based QueryBuilder when
+/// complex SQL features (CTEs, Window Functions, etc.) are needed.
+pub struct RawQuery<'a> {
+    db: &'a Database,
+    sql: &'a str,
+    args: AnyArguments<'a>,
+}
+
+impl<'a> RawQuery<'a> {
+    /// Creates a new RawQuery instance.
+    pub(crate) fn new(db: &'a Database, sql: &'a str) -> Self {
+        Self {
+            db,
+            sql,
+            args: AnyArguments::default(),
+        }
+    }
+
+    /// Binds a parameter to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The value to bind. Must implement `sqlx::Encode` and `sqlx::Type`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.raw("SELECT * FROM users WHERE age > $1 AND active = $2")
+    ///     .bind(18)
+    ///     .bind(true)
+    ///     .fetch_all::<User>()
+    ///     .await?;
+    /// ```
+    pub fn bind<T>(mut self, value: T) -> Self
+    where
+        T: 'a + sqlx::Encode<'a, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Sync,
+    {
+        let _ = self.args.add(value);
+        self
+    }
+
+    /// Executes the query and returns all matching rows mapped to type `T`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The result type. Must implement `sqlx::FromRow`.
+    pub async fn fetch_all<T>(self) -> Result<Vec<T>, Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
+    {
+        sqlx::query_as_with::<_, T, _>(self.sql, self.args)
+            .fetch_all(&self.db.pool)
+            .await
+    }
+
+    /// Executes the query and returns the first matching row mapped to type `T`.
+    ///
+    /// Returns `sqlx::Error::RowNotFound` if no results are found.
+    pub async fn fetch_one<T>(self) -> Result<T, Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
+    {
+        sqlx::query_as_with::<_, T, _>(self.sql, self.args)
+            .fetch_one(&self.db.pool)
+            .await
+    }
+
+    /// Executes the query (INSERT, UPDATE, DELETE) and returns the number of affected rows.
+    pub async fn execute(self) -> Result<u64, Error> {
+        let result = sqlx::query_with(self.sql, self.args)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }

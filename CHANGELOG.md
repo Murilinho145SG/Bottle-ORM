@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-01-27
+
+### Added
+- **Raw SQL Support**: Introduced `db.raw("SELECT ...")` to allow executing arbitrary SQL queries with parameter binding (`.bind()`), mapping to structs (`.fetch_all()`, `.fetch_one()`), or executing updates (`.execute()`). This provides an escape hatch for complex queries not supported by the query builder.
+
 ## [0.4.3] - 2026-01-23
 
 ### Fixed
