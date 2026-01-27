@@ -314,6 +314,20 @@ pub struct ColumnInfo {
     /// // SQL: FOREIGN KEY (user_id) REFERENCES user (id)
     /// ```
     pub foreign_key: Option<&'static str>,
+
+    /// Whether this field should be omitted from queries by default.
+    ///
+    /// Set via `#[orm(omit)]` attribute. When `true`, this column will be
+    /// excluded from query results unless explicitly selected.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[orm(omit)]
+    /// password: String,
+    /// // omit: true
+    /// // This field will not be included in SELECT * queries
+    /// ```
+    pub omit: bool,
 }
 
 // ============================================================================
@@ -559,6 +573,7 @@ mod tests {
             index: false,
             foreign_table: None,
             foreign_key: None,
+            omit: false,
         };
 
         assert_eq!(col.name, "test_column");
@@ -580,6 +595,7 @@ mod tests {
             index: false,
             foreign_table: Some("User"),
             foreign_key: Some("id"),
+            omit: false,
         };
 
         assert_eq!(col.foreign_table, Some("User"));

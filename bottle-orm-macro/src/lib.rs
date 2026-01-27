@@ -93,12 +93,41 @@
 //! ```
 //! Creates a foreign key relationship. Format: `"TargetTable::target_column"`.
 //!
+//! ### Omit Field
+//! ```rust,ignore
+//! #[orm(omit)]
+//! password: String,
+//! ```
+//! Excludes this field from query results by default. Returns a placeholder value
+//! instead of the actual data (`"omited"` for strings, `1970-01-01T00:00:00Z` for dates, etc.).
+//!
 //! ### Combining Attributes
 //! ```rust,ignore
 //! #[orm(size = 50, unique, index)]
 //! username: String,
 //! ```
 //! Multiple attributes can be combined on a single field.
+//!
+//! ## Generated Field Constants
+//!
+//! The macro also generates a `{model}_fields` module with constants for each field,
+//! enabling IDE autocomplete:
+//!
+//! ```rust,ignore
+//! // For struct User, the macro generates:
+//! pub mod user_fields {
+//!     pub const ID: &'static str = "id";
+//!     pub const USERNAME: &'static str = "username";
+//!     pub const PASSWORD: &'static str = "password";
+//! }
+//!
+//! // Use with filter, select, omit, etc:
+//! db.model::<User>()
+//!     .filter(user_fields::AGE, ">=", 18)
+//!     .omit(user_fields::PASSWORD)
+//!     .scan()
+//!     .await?;
+//! ```
 //!
 //! ## Type Support
 //!
@@ -232,6 +261,7 @@ mod derive_anyrow;
 /// * `update_time` - Auto-updates timestamp (future feature)
 /// * `size = N` - Sets column size (VARCHAR(N))
 /// * `foreign_key = "Table::Column"` - Defines a Foreign Key relationship
+/// * `omit` - Excludes field from queries (returns placeholder value)
 ///
 /// # Type Mapping
 ///

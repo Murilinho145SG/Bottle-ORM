@@ -171,6 +171,9 @@ pub struct QueryBuilder<'a, T, E> {
     /// Distinct flag
     pub(crate) is_distinct: bool,
 
+    /// Columns to omit from the query results (inverse of select_columns)
+    pub(crate) omit_columns: Vec<String>,
+
     /// PhantomData to bind the generic type T
     pub(crate) _marker: PhantomData<&'a T>,
 }
@@ -217,6 +220,13 @@ where
         columns_info: Vec<ColumnInfo>,
         columns: Vec<String>,
     ) -> Self {
+        // Pre-populate omit_columns with globally omitted columns (from #[orm(omit)] attribute)
+        let omit_columns: Vec<String> = columns_info
+            .iter()
+            .filter(|c| c.omit)
+            .map(|c| c.name.to_snake_case())
+            .collect();
+
         Self {
             tx,
             driver,
@@ -231,6 +241,7 @@ where
             group_by_clauses: Vec::new(),
             having_clauses: Vec::new(),
             is_distinct: false,
+            omit_columns,
             limit: None,
             offset: None,
             _marker: PhantomData,
@@ -847,6 +858,47 @@ where
         self
     }
 
+    /// Excludes specific columns from the query results.
+    ///
+    /// This is the inverse of `select()`. Instead of specifying which columns to include,
+    /// you specify which columns to exclude. All other columns will be returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `columns` - Comma-separated list of column names to exclude
+    ///
+    /// # Priority
+    ///
+    /// If both `select()` and `omit()` are used, `select()` takes priority.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Exclude password from results
+    /// let user = db.model::<User>()
+    ///     .omit("password")
+    ///     .first()
+    ///     .await?;
+    ///
+    /// // Exclude multiple fields
+    /// let user = db.model::<User>()
+    ///     .omit("password, secret_token")
+    ///     .first()
+    ///     .await?;
+    ///
+    /// // Using with generated field constants (autocomplete support)
+    /// let user = db.model::<User>()
+    ///     .omit(user_fields::PASSWORD)
+    ///     .first()
+    ///     .await?;
+    /// ```
+    pub fn omit(mut self, columns: &str) -> Self {
+        for col in columns.split(',') {
+            self.omit_columns.push(col.trim().to_snake_case());
+        }
+        self
+    }
+
     /// Sets the query offset (pagination).
     ///
     /// Specifies the number of rows to skip before starting to return rows.
@@ -1223,11 +1275,37 @@ where
                 }
                 return args;
             } else {
+                // For omitted columns, return 'omited' as placeholder value
                 return struct_cols
                     .iter()
                     .map(|c| {
                         let col_snake = c.column.to_snake_case();
-                        if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
+                        let is_omitted = self.omit_columns.contains(&col_snake);
+                        
+                        if is_omitted {
+                            // Return type-appropriate placeholder based on sql_type
+                            let placeholder = match c.sql_type {
+                                // String types
+                                "TEXT" | "VARCHAR" | "CHAR" | "STRING" => "'omited'",
+                                // Date/Time types - use epoch timestamp
+                                "TIMESTAMP" | "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => 
+                                    "'1970-01-01T00:00:00Z'",
+                                "DATE" => "'1970-01-01'",
+                                "TIME" => "'00:00:00'",
+                                // Numeric types
+                                "INTEGER" | "INT" | "SMALLINT" | "BIGINT" | "INT4" | "INT8" => "0",
+                                "REAL" | "FLOAT" | "DOUBLE" | "FLOAT4" | "FLOAT8" | "DECIMAL" | "NUMERIC" => "0.0",
+                                // Boolean
+                                "BOOLEAN" | "BOOL" => "false",
+                                // UUID - nil UUID
+                                "UUID" => "'00000000-0000-0000-0000-000000000000'",
+                                // JSON types
+                                "JSON" | "JSONB" => "'{}'",
+                                // Default fallback for unknown types
+                                _ => "'omited'",
+                            };
+                            format!("{} AS \"{}\"", placeholder, col_snake)
+                        } else if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
                             if !self.joins_clauses.is_empty() {
                                 format!(
                                     "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",

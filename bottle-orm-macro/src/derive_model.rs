@@ -9,8 +9,9 @@
 // ============================================================================
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{quote, format_ident};
 use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Type};
+use heck::ToSnakeCase;
 
 // ============================================================================
 // Internal Crate Imports
@@ -79,6 +80,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let mut update_time = false;
         let mut unique = false;
         let mut index = false;
+        let mut omit = false;
         let mut foreign_table_tokens = quote! { None };
         let mut foreign_key_tokens = quote! { None };
 
@@ -121,6 +123,9 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                             return Err(meta.error("Invalid format for foreign_key. Use 'Table::column'"));
                         }
                     }
+                    if meta.path.is_ident("omit") {
+                        omit = true;
+                    }
                     Ok(())
                 })
                 .expect("Failed to parse orm attributes");
@@ -143,7 +148,8 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                  unique: #unique,
                  index: #index,
                  foreign_table: #foreign_table_tokens,
-                 foreign_key: #foreign_key_tokens
+                 foreign_key: #foreign_key_tokens,
+                 omit: #omit
             }
         }
     });
@@ -282,10 +288,42 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     let field_names_construct = fields.named.iter().map(|f| &f.ident);
 
     // ========================================================================
+    // Generate Fields Module for Autocomplete
+    // ========================================================================
+
+    let module_name = format_ident!("{}_fields", struct_name.to_string().to_snake_case());
+    let field_constants = fields.named.iter().map(|f| {
+        let field_name = &f.ident;
+        let const_name = format_ident!("{}", field_name.as_ref().unwrap().to_string().to_uppercase());
+        let name_str = field_name.as_ref().unwrap().to_string();
+        quote! {
+            pub const #const_name: &'static str = #name_str;
+        }
+    });
+
+    // ========================================================================
     // Generate Complete Model & AnyImpl & FromRow Implementation
     // ========================================================================
 
     quote! {
+        /// Auto-generated field constants for autocomplete support.
+        ///
+        /// Use these constants with `filter()`, `select()`, `omit()`, and other
+        /// QueryBuilder methods for IDE autocomplete.
+        ///
+        /// # Example
+        /// ```rust,ignore
+        /// use crate::user_fields;
+        /// db.model::<User>()
+        ///     .filter(user_fields::AGE, ">=", 18)
+        ///     .omit(user_fields::PASSWORD)
+        ///     .scan()
+        ///     .await?;
+        /// ```
+        pub mod #module_name {
+            #(#field_constants)*
+        }
+
         impl bottle_orm::Model for #struct_name {
             fn table_name() -> &'static str {
                 stringify!(#struct_name)
