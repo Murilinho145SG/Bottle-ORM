@@ -5,33 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-01-30
+
+### Added
+
+- **Tuple Query Support**: Added support for mapping query results directly to tuples of Models (e.g., `(User, Account)`). This enables single-query JOINs with automatic column aliasing (`user__id`, `account__id`) to avoid name collisions.
+- **Trait `FromAnyRow`**: Introduced `FromAnyRow` trait to handle robust row mapping for complex types (tuples) and to replace `sqlx::FromRow` usage internally for better control over type conversions (especially `Uuid` and `DateTime` with `sqlx::Any`).
+- **Field Constants**: Added auto-generated field constants module (e.g., `user_fields::AGE`) for Model structs to support autocomplete and safer query building (contribution by Marcos Brito).
+- **Omit Attribute**: Added `#[orm(omit)]` attribute to exclude specific columns from being selected by default (contribution by Marcos Brito).
+
+### Fixed
+
+- **Postgres JSON Casting**: Restricted `to_json` casting for temporal types to PostgreSQL driver only, preventing syntax errors on other databases (contribution by Marcos Brito).
+- **UUID/Time Decoding**: Improved reliability of `Uuid` and `DateTime` decoding on `sqlx::Any` driver by strictly using string parsing fallback, resolving "trait bound not satisfied" errors.
+
 ## [0.4.5] - 2026-01-27
 
 ### Added
+
 - **Transaction Raw SQL**: Added `.raw()` method to `Transaction` struct, allowing raw SQL queries to be executed atomically within a transaction scope.
 - **Enhanced Raw Query**: Added `fetch_optional()`, `fetch_scalar()`, and `fetch_scalar_optional()` to `RawQuery` for more flexible data retrieval.
 
 ## [0.4.4] - 2026-01-27
 
 ### Added
+
 - **Raw SQL Support**: Introduced `db.raw("SELECT ...")` to allow executing arbitrary SQL queries with parameter binding (`.bind()`), mapping to structs (`.fetch_all()`, `.fetch_one()`), or executing updates (`.execute()`). This provides an escape hatch for complex queries not supported by the query builder.
 
 ## [0.4.3] - 2026-01-23
 
 ### Fixed
-- **Conflicting Implementation**: Fixed `AnyImpl` conflict when deriving both `Model` and `FromAnyRow`. 
+
+- **Conflicting Implementation**: Fixed `AnyImpl` conflict when deriving both `Model` and `FromAnyRow`.
 - **Model Derive Enhancement**: `#[derive(Model)]` now automatically implements `sqlx::FromRow<'r, sqlx::any::AnyRow>`, removing the need for `FromAnyRow` or manual implementation. It robustly handles `DateTime` and `Uuid` decoding from `AnyRow` (supporting both text and binary protocols via string parsing fallback).
 - **Dependency Features**: Added `uuid` feature to `sqlx` dependency in `bottle` crate (example) and `bottle-orm`.
 
 ## [0.4.2] - 2026-01-23
 
 ### Fixed
+
 - **Pagination Compilation Error**: Fixed an issue where `#[derive(Model)]` did not implement `AnyImpl`, causing compilation errors when using `paginate()` or `scan()` with models. Now `derive(Model)` automatically implements `AnyImpl`.
 - **SQLx UUID Feature**: Enabled `uuid` feature in `sqlx` dependency to ensure proper UUID handling in `Any` driver.
 
 ## [0.4.1] - 2026-01-23
 
 ### Added
+
 - **Database Configuration**: Introduced `DatabaseBuilder` to allow custom connection pool settings.
   - Configure `max_connections`, `min_connections`, `acquire_timeout`, `idle_timeout`, and `max_lifetime`.
 
@@ -40,35 +59,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 
 #### 🚀 Enhanced Query Builder
+
 - **Joins**: Added support for explicit joins: `left_join`, `right_join`, `inner_join`, `full_join`.
 - **Grouping**: Added `group_by` and `having` methods for analytical queries.
 - **Distinct**: Added `distinct()` method to filter duplicate rows.
 - **Aggregates**: Added helper methods for `count()`, `sum()`, `avg()`, `min()`, and `max()`.
 
 #### 🌐 Web Framework Integration
+
 - **Pagination Module**: Introduced `bottle_orm::pagination` with `Pagination` and `Paginated<T>` structs.
   - Implements `Serialize`/`Deserialize` for easy integration with frameworks like **Axum** and **Actix-web**.
   - `paginate()` method automatically executes count and data queries in a single step.
 
 #### 🛠️ Extended Type Support
+
 - **Numeric Types**: Added support for `f32` (REAL), `u32` (INTEGER), `i16` (SMALLINT), `u16` (INTEGER), `i8`/`u8` (SMALLINT).
 - **JSON Support**: Added first-class support for `serde_json::Value` (mapped to `JSONB` in Postgres).
-- **Temporal Improvements**: 
+- **Temporal Improvements**:
   - Added support for `DateTime<FixedOffset>` and `DateTime<Local>`.
   - Improved parsing resilience for various date string formats.
 
 #### 💾 Database Compatibility
-- **Foreign Keys**: 
+
+- **Foreign Keys**:
   - **SQLite**: Added support for inline foreign keys in `create_table` (since SQLite doesn't support `ADD CONSTRAINT`).
   - **MySQL**: Implemented `assign_foreign_keys` using `information_schema` checks.
   - **PostgreSQL**: Maintained existing support.
 
 ### Documentation
+
 - **Comprehensive Docs**: Added detailed Rustdoc comments with examples for all public modules (`query_builder`, `pagination`, `transaction`, etc.).
 
 ## [0.3.4] - 2026-01-22
 
 ### Fixed
+
 - **Lifetime "Implementation not general enough" Error**: Resolved a critical compilation error when using `QueryBuilder` methods (like `insert`, `update`, `first`, `scan`) in async contexts such as `axum` handlers.
   - This was caused by higher-ranked trait bounds (HRTB) on the `Connection` trait and implicit future lifetimes.
   - **Refactored `QueryBuilder`**: It now stores the `driver` explicitly and handles the connection generic `E` more flexibly.
@@ -79,6 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.3] - 2026-01-22
 
 ### Fixed
+
 - **Transaction Model Lifetime**: Resolved a critical lifetime issue in `Transaction::model` that prevented the ORM from being used effectively in async handlers (like Axum) due to "implementation is not general enough" errors.
   - `QueryBuilder` now takes ownership of the connection handle (`E`) instead of a mutable reference (`&mut E`).
   - This allows `Database` (cloned) and `&mut Transaction` to be used interchangeably without lifetime conflicts.
@@ -86,12 +112,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.2] - 2026-01-22
 
 ### Fixed
+
 - **Transaction Implementation**: Fixed a bug in `Transaction` implementation where `Connection` was implemented for `&mut Transaction` instead of `Transaction`, which caused issues with borrow checker and usage in `QueryBuilder`.
 - **Connection Trait**: Added blanket implementation of `Connection` for `&'a mut T` where `T: Connection`, improving ergonomics.
 
 ## [0.3.1] - 2026-01-21
 
 ### Changed
+
 - **Debug Mode Improvements**: Replaced `println!` with `log::debug!` for query logging.
   - Queries are now logged at the `DEBUG` level.
 - **Foreign Key Validation**: Relaxed `Option<T>` requirement for fields annotated with `#[foreign_key]` to prepare for future eager loading features.
@@ -100,20 +128,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - 2026-01-21
 
 ### Added
+
 - **JOIN Support**: Implemented `join()` method in `QueryBuilder` to allow table joins.
   - Added support for qualified column names (e.g., `table.column`) in select and filter clauses to prevent ambiguity.
 - **UUID Support**: Added direct support for parsing `Uuid` types in `FromAnyRow` derive macro.
 
 ### Changed
+
 - **Foreign Key Validation**: Now enforces `Option<T>` type for fields annotated with `#[foreign_key]` to ensure correct nullability handling.
 
 ### Fixed
+
 - **Query Builder**: Resolved column ambiguity issues in SQL generation when using joins.
 - **Cleanup**: Removed debug print statements from `scalar` query execution.
 
 ## [0.2.2-rc.3] - 2026-01-20
 
 ### Added
+
 - **Update & Delete Support**: Implemented comprehensive update and delete capabilities in `QueryBuilder`.
   - `update(col, value)`: Efficiently update a single column with type safety.
   - `updates(model)`: Update all active columns using a full model instance.
@@ -123,14 +155,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JOIN Support Preparation**: Added `joins_clauses` field to `QueryBuilder` structure to support future JOIN operations.
 
 ### Fixed
+
 - **Query Builder Ordering**: Fixed `ORDER BY` clauses not being applied in `scan()` and `first()` methods.
 - **SQL Generation**: Fixed invalid SQL generation when multiple `order()` calls are chained (now correctly comma-separated).
 - **Deterministic Ordering**: Improved `first()` method to strictly respect user ordering if provided, falling back to Primary Key ordering only when no specific order is requested.
 
-
 ### Added
 
 #### AnyImpl & FromAnyRow Support
+
 - **Macro `FromAnyRow`**: New derive macro for scanning arbitrary query results into structs
   - Allows mapping `sqlx::any::AnyRow` to custom structs
   - Handles type conversions automatically, with special logic for `DateTime`
@@ -147,6 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic `to_json` casting for temporal types (`DateTime`, `NaiveDateTime`, etc.) in SELECT clauses to ensure compatibility across drivers when using `AnyRow`
 
 #### Query Builder Enhancements
+
 - **Method `scalar()`**: Added support for fetching single scalar values directly
   - Enables intuitive queries like `let count: i64 = query.select("count(*)").scalar().await?;`
   - Bypasses `FromRow` requirement for simple primitive types (`i32`, `String`, etc.)
@@ -155,6 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Allows scanning results directly into tuples: `let (id, name): (i32, String) = ...`
 
 #### DateTime Temporal Type Conversion System
+
 - **Module `temporal.rs`**: Specialized system for temporal type conversions
   - Parsing functions with error handling: `parse_datetime_utc()`, `parse_naive_datetime()`, `parse_naive_date()`, `parse_naive_time()`
   - Driver-optimized formatting: `format_datetime_for_driver()`, `format_naive_datetime_for_driver()`
@@ -192,6 +227,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Formatting examples
 
 #### UUID Support (Versions 1-7)
+
 - **Full UUID Support**: Added comprehensive support for all UUID versions (1 through 7)
   - Version 1: Time-based with MAC address
   - Version 3: Name-based using MD5 hash
@@ -205,12 +241,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added UUID examples in README.md demonstrating usage with different versions
 
 #### Documentation Improvements
+
 - **Comprehensive Code Comments**: Added detailed documentation following Rust best practices
   - Module-level documentation for all files
   - Function-level documentation with examples and parameter descriptions
   - Inline comments explaining complex logic
   - Type and trait documentation with usage examples
-  
 - **Organized Structure**: Improved code organization
   - Clear section separators with comment blocks
   - Grouped related functionality
@@ -219,6 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 #### DateTime Conversion Improvements
+
 - **query_builder.rs**: Refactored to use `temporal` and `value_binding` modules
   - Replaced naive `to_string()` conversions with driver-optimized formatting
   - Added proper error handling for temporal type conversions
@@ -233,6 +270,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `NaiveTime` → `TIME` (all drivers)
 
 #### Code Organization
+
 - **lib.rs**: Complete reorganization with detailed module documentation
   - Added module-level documentation
   - Organized imports and re-exports with descriptive comments
@@ -287,6 +325,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added type support documentation
 
 #### Bug Fixes
+
 - Fixed unused `mut` warnings in `query_builder.rs`
 - Fixed unused `Result` warnings for `.add()` calls in `temporal.rs` and `value_binding.rs`
 - Converted doc comments to regular comments in match arms (following Rust conventions)
@@ -294,6 +333,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed DateTime conversion using generic `to_string()` instead of driver-specific formats
 
 ### Performance
+
 - **Reduced conversion overhead**: Driver-specific formatting eliminates unnecessary parsing
 - **PostgreSQL type casting**: Explicit casting improves query planning and execution
 - **Optimized string formats**: Each driver receives the optimal format for its internal representation
@@ -303,6 +343,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.1] - Previous Release
 
 ### Initial Features
+
 - Basic ORM functionality
 - PostgreSQL, MySQL, and SQLite support
 - Fluent query builder

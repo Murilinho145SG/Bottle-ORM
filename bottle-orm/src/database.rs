@@ -150,6 +150,7 @@ pub enum Drivers {
 ///     .connect("postgres://...")
 ///     .await?;
 /// ```
+#[derive(Debug)]
 pub struct DatabaseBuilder {
     options: AnyPoolOptions,
 }
@@ -250,7 +251,7 @@ impl DatabaseBuilder {
 ///     Ok(())
 /// }
 /// ```
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Database {
     /// The sqlx connection pool for executing database queries.
     ///
@@ -834,26 +835,16 @@ impl<'a> Connection for &mut sqlx::Transaction<'a, sqlx::Any> {
 }
 
 // ============================================================================
-
 // Raw SQL Query Builder
-
 // ============================================================================
-
 /// A builder for executing raw SQL queries with parameter binding.
-
 ///
-
 /// Returned by `Database::raw()` or `Transaction::raw()`. Allows constructing safe, parameterized
-
 /// SQL queries that can bypass the standard model-based QueryBuilder when
-
 /// complex SQL features (CTEs, Window Functions, etc.) are needed.
-
 pub struct RawQuery<'a, C> {
     conn: C,
-
     sql: &'a str,
-
     args: AnyArguments<'a>,
 }
 
@@ -862,32 +853,24 @@ where
     C: Connection + Send,
 {
     /// Creates a new RawQuery instance.
-
     pub(crate) fn new(conn: C, sql: &'a str) -> Self {
         Self { conn, sql, args: AnyArguments::default() }
     }
 
     /// Binds a parameter to the query.
-
     ///
-
     /// # Arguments
-
     ///
-
     /// * `value` - The value to bind. Must implement `sqlx::Encode` and `sqlx::Type`.
-
     pub fn bind<T>(mut self, value: T) -> Self
     where
         T: 'a + sqlx::Encode<'a, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Sync,
     {
         let _ = self.args.add(value);
-
         self
     }
 
     /// Executes the query and returns all matching rows mapped to type `T`.
-
     pub async fn fetch_all<T>(mut self) -> Result<Vec<T>, Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
@@ -896,7 +879,6 @@ where
     }
 
     /// Executes the query and returns the first matching row mapped to type `T`.
-
     pub async fn fetch_one<T>(mut self) -> Result<T, Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
@@ -905,7 +887,6 @@ where
     }
 
     /// Executes the query and returns the first matching row, or None if not found.
-
     pub async fn fetch_optional<T>(mut self) -> Result<Option<T>, Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin,
@@ -914,11 +895,8 @@ where
     }
 
     /// Executes the query and returns a single scalar value.
-
     ///
-
     /// Useful for queries like `SELECT count(*) ...` or `SELECT id ...`.
-
     pub async fn fetch_scalar<O>(mut self) -> Result<O, Error>
     where
         O: for<'r> sqlx::Decode<'r, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Unpin,
@@ -927,7 +905,6 @@ where
     }
 
     /// Executes the query and returns a single scalar value, or None if not found.
-
     pub async fn fetch_scalar_optional<O>(mut self) -> Result<Option<O>, Error>
     where
         O: for<'r> sqlx::Decode<'r, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Unpin,
@@ -936,7 +913,6 @@ where
     }
 
     /// Executes the query (INSERT, UPDATE, DELETE) and returns the number of affected rows.
-
     pub async fn execute(mut self) -> Result<u64, Error> {
         let result = sqlx::query_with(self.sql, self.args).execute(self.conn.executor()).await?;
 

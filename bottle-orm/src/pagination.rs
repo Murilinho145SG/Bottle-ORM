@@ -30,9 +30,9 @@
 //! }
 //! ```
 
-use crate::{database::Connection, model::Model, query_builder::QueryBuilder, AnyImpl};
+use crate::{any_struct::FromAnyRow, database::Connection, model::Model, query_builder::QueryBuilder, AnyImpl};
 use serde::{Deserialize, Serialize};
-use sqlx::{any::AnyRow, FromRow, Row};
+use sqlx::Row;
 
 /// A standard pagination structure.
 ///
@@ -134,7 +134,7 @@ impl Pagination {
     where
         T: Model + Send + Sync + Unpin,
         E: Connection + Send,
-        R: for<'r> FromRow<'r, AnyRow> + AnyImpl + Send + Unpin,
+        R: FromAnyRow + AnyImpl + Send + Unpin,
     {
         // 1. Prepare COUNT query
         // We temporarily replace selected columns with COUNT(*) and remove order/limit/offset

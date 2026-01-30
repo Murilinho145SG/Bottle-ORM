@@ -373,7 +373,7 @@ pub fn model_derive(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_derive(FromAnyRow)]
 pub fn any_derive(input: TokenStream) -> TokenStream {
-       let ast = parse_macro_input!(input as DeriveInput);
-       let expanded = derive_anyrow::expand(ast);
-       TokenStream::from(expanded)
+    let ast = parse_macro_input!(input as DeriveInput);
+    let expanded = derive_anyrow::expand(ast);
+    TokenStream::from(expanded)
 }

@@ -19,11 +19,11 @@
 //! - `NaiveTime` - Time only (hour, minute, second)
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use sqlx::Arguments;
 use sqlx::any::AnyArguments;
+use sqlx::Arguments;
 
-use crate::Error;
 use crate::database::Drivers;
+use crate::Error;
 
 // ============================================================================
 // DateTime<Utc> and DateTime<FixedOffset> Conversion
@@ -71,7 +71,7 @@ pub fn bind_datetime_fixed(
             let _ = query_args.add(formatted);
         }
         Drivers::SQLite => {
-             // SQLite uses text, so RFC3339 with offset is fine
+            // SQLite uses text, so RFC3339 with offset is fine
             let _ = query_args.add(value.to_rfc3339());
         }
     }
@@ -88,7 +88,7 @@ pub fn parse_datetime_utc(value: &str) -> Result<DateTime<Utc>, Error> {
     if let Ok(dt) = value.parse::<DateTime<Utc>>() {
         return Ok(dt);
     }
-    
+
     // Try FixedOffset parsing and convert to UTC
     if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
         return Ok(dt.with_timezone(&Utc));
@@ -97,11 +97,11 @@ pub fn parse_datetime_utc(value: &str) -> Result<DateTime<Utc>, Error> {
     // Try parsing without timezone (Naive) and assume UTC
     // This handles "YYYY-MM-DD HH:MM:SS" formats common in MySQL/SQLite
     if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f") {
-         return Ok(DateTime::from_naive_utc_and_offset(naive, Utc));
+        return Ok(DateTime::from_naive_utc_and_offset(naive, Utc));
     }
-    
+
     if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
-         return Ok(DateTime::from_naive_utc_and_offset(naive, Utc));
+        return Ok(DateTime::from_naive_utc_and_offset(naive, Utc));
     }
 
     Err(Error::Conversion(format!("Failed to parse DateTime<Utc> from '{}'", value)))
@@ -112,12 +112,12 @@ pub fn parse_datetime_fixed(value: &str) -> Result<DateTime<FixedOffset>, Error>
     if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
         return Ok(dt);
     }
-    
+
     // If it lacks timezone info (Naive), we generally assume UTC for safety
     if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f") {
-         // Create a FixedOffset of +00:00 (UTC)
-         let offset = FixedOffset::east_opt(0).unwrap();
-         return Ok(DateTime::from_naive_utc_and_offset(naive, offset));
+        // Create a FixedOffset of +00:00 (UTC)
+        let offset = FixedOffset::east_opt(0).unwrap();
+        return Ok(DateTime::from_naive_utc_and_offset(naive, offset));
     }
 
     Err(Error::Conversion(format!("Failed to parse DateTime<FixedOffset> from '{}'", value)))
@@ -183,13 +183,13 @@ pub fn parse_naive_datetime(value: &str) -> Result<NaiveDateTime, Error> {
     if let Ok(dt) = value.parse::<NaiveDateTime>() {
         return Ok(dt);
     }
-    
+
     // Try formats common in different DBs
     // YYYY-MM-DD HH:MM:SS
     if let Ok(dt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
         return Ok(dt);
     }
-    
+
     // YYYY-MM-DD HH:MM:SS.f
     if let Ok(dt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f") {
         return Ok(dt);
@@ -360,10 +360,10 @@ pub fn format_datetime_for_driver(value: &DateTime<Utc>, driver: &Drivers) -> St
 
 /// Converts a `DateTime<FixedOffset>` to the format expected by a specific driver.
 pub fn format_datetime_fixed_for_driver(value: &DateTime<FixedOffset>, driver: &Drivers) -> String {
-     match driver {
+    match driver {
         Drivers::Postgres => value.to_rfc3339(),
         Drivers::MySQL => {
-             // Convert to UTC for MySQL
+            // Convert to UTC for MySQL
             let value_utc: DateTime<Utc> = value.with_timezone(&Utc);
             value_utc.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
         }

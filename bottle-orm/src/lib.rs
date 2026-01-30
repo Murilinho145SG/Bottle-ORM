@@ -143,7 +143,7 @@ pub use model::{ColumnInfo, Model};
 ///
 /// `AnyImpl` is the trait implemented by structs that can be scanned from `AnyRow`,
 /// providing necessary column metadata via `AnyInfo`.
-pub use any_struct::{AnyImpl, AnyInfo};
+pub use any_struct::{AnyImpl, AnyInfo, FromAnyRow};
 
 pub use transaction::Transaction;
 

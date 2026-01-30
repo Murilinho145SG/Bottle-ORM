@@ -49,10 +49,7 @@
 
 use futures::future::BoxFuture;
 use heck::ToSnakeCase;
-use sqlx::{
-    Any, Arguments, Decode, Encode, FromRow, Row, Type,
-    any::{AnyArguments, AnyRow},
-};
+use sqlx::{any::AnyArguments, Any, Arguments, Decode, Encode, Row, Type};
 use std::marker::PhantomData;
 use uuid::Uuid;
 
@@ -61,11 +58,12 @@ use uuid::Uuid;
 // ============================================================================
 
 use crate::{
-    AnyImpl, Error,
+    any_struct::FromAnyRow,
     database::{Connection, Drivers},
     model::{ColumnInfo, Model},
     temporal::{self, is_temporal_type},
     value_binding::ValueBinder,
+    AnyImpl, Error,
 };
 
 // ============================================================================
@@ -221,11 +219,8 @@ where
         columns: Vec<String>,
     ) -> Self {
         // Pre-populate omit_columns with globally omitted columns (from #[orm(omit)] attribute)
-        let omit_columns: Vec<String> = columns_info
-            .iter()
-            .filter(|c| c.omit)
-            .map(|c| c.name.to_snake_case())
-            .collect();
+        let omit_columns: Vec<String> =
+            columns_info.iter().filter(|c| c.omit).map(|c| c.name.to_snake_case()).collect();
 
         Self {
             tx,
@@ -1281,15 +1276,16 @@ where
                     .map(|c| {
                         let col_snake = c.column.to_snake_case();
                         let is_omitted = self.omit_columns.contains(&col_snake);
-                        
+                        let table_name =
+                            if !c.table.is_empty() { c.table.to_snake_case() } else { self.table_name.to_snake_case() };
+
                         if is_omitted {
                             // Return type-appropriate placeholder based on sql_type
                             let placeholder = match c.sql_type {
                                 // String types
                                 "TEXT" | "VARCHAR" | "CHAR" | "STRING" => "'omited'",
                                 // Date/Time types - use epoch timestamp
-                                "TIMESTAMP" | "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => 
-                                    "'1970-01-01T00:00:00Z'",
+                                "TIMESTAMP" | "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => "'1970-01-01T00:00:00Z'",
                                 "DATE" => "'1970-01-01'",
                                 "TIME" => "'00:00:00'",
                                 // Numeric types
@@ -1304,22 +1300,14 @@ where
                                 // Default fallback for unknown types
                                 _ => "'omited'",
                             };
-                            format!("{} AS \"{}\"", placeholder, col_snake)
+                            format!("{} AS \"{}__{}\"", placeholder, table_name, col_snake)
                         } else if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
-                            if !self.joins_clauses.is_empty() {
-                                format!(
-                                    "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
-                                    self.table_name.to_snake_case(),
-                                    col_snake,
-                                    col_snake
-                                )
-                            } else {
-                                format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake)
-                            }
-                        } else if !self.joins_clauses.is_empty() {
-                            format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake)
+                            format!(
+                                "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}__{}\"",
+                                table_name, col_snake, table_name, col_snake
+                            )
                         } else {
-                            format!("\"{}\"", col_snake)
+                            format!("\"{}\".\"{}\" AS \"{}__{}\"", table_name, col_snake, table_name, col_snake)
                         }
                     })
                     .collect();
@@ -1377,7 +1365,7 @@ where
     /// ```
     pub async fn scan<R>(mut self) -> Result<Vec<R>, sqlx::Error>
     where
-        R: for<'r> FromRow<'r, AnyRow> + AnyImpl + Send + Unpin,
+        R: FromAnyRow + AnyImpl + Send + Unpin,
     {
         // Build SELECT clause
         let mut query = String::from("SELECT ");
@@ -1457,7 +1445,9 @@ where
         }
 
         // Execute query and fetch all results
-        sqlx::query_as_with::<_, R, _>(&query, args).fetch_all(self.tx.executor()).await
+        let rows = sqlx::query_with(&query, args).fetch_all(self.tx.executor()).await?;
+
+        rows.iter().map(|row| R::from_any_row(row)).collect()
     }
 
     /// Executes the query and returns only the first result.
@@ -1511,7 +1501,7 @@ where
     /// ```
     pub async fn first<R>(mut self) -> Result<R, sqlx::Error>
     where
-        R: for<'r> FromRow<'r, AnyRow> + AnyImpl + Send + Unpin,
+        R: FromAnyRow + AnyImpl + Send + Unpin,
     {
         // Build SELECT clause
         let mut query = String::from("SELECT ");
@@ -1577,7 +1567,8 @@ where
         log::debug!("SQL: {}", query);
 
         // Execute query and fetch exactly one result
-        sqlx::query_as_with::<_, R, _>(&query, args).fetch_one(self.tx.executor()).await
+        let row = sqlx::query_with(&query, args).fetch_one(self.tx.executor()).await?;
+        R::from_any_row(&row)
     }
 
     /// Executes the query and returns a single scalar value.

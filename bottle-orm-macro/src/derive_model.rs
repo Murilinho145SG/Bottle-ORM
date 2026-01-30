@@ -192,6 +192,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     // ========================================================================
     // Generate AnyInfo Column Definitions
     // ========================================================================
+    let table_name_str = struct_name.to_string().to_snake_case();
     let any_column_defs = fields.named.iter().map(|f| {
         let field_name = &f.ident;
         let field_type = &f.ty;
@@ -201,6 +202,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
             bottle_orm::AnyInfo {
                 column: stringify!(#field_name),
                 sql_type: #sql_type,
+                table: #table_name_str,
             }
         }
     });
@@ -212,17 +214,17 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let field_name = &f.ident;
         let field_type = &f.ty;
         let column_name = field_name.as_ref().unwrap().to_string();
-        
+        let alias_name = format!("{}__{}", table_name_str, column_name);
+
         let (sql_type, is_nullable) = rust_type_to_sql(field_type);
 
         if sql_type == "TIMESTAMPTZ" || sql_type == "TIMESTAMP" || sql_type == "DATE" || sql_type == "TIME" {
-             // For temporal types, we MUST decode as String and parse, because sqlx::Any 
-             // doesn't reliably support decoding to DateTime directly (due to type erasure strictness).
+             // For temporal types, we MUST decode as String and parse
              if is_nullable {
                  if let Some(inner_type) = get_inner_type(field_type) {
                      quote! {
                         let #field_name: #field_type = {
-                            match row.try_get::<Option<String>, _>(#column_name) {
+                            match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name)) {
                                 Ok(Some(s)) => {
                                     match s.parse::<#inner_type>() {
                                         Ok(v) => Some(v),
@@ -230,30 +232,30 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                                     }
                                 },
                                 Ok(None) => None,
-                                Err(e) => return Err(e) // Propagate error (likely column not found or type mismatch)
+                                Err(e) => return Err(e)
                             }
                         };
                      }
                  } else {
-                     quote! { let #field_name: #field_type = row.try_get(#column_name)?; }
+                     quote! { let #field_name: #field_type = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?; }
                  }
              } else {
                  quote! {
                     let #field_name: #field_type = {
-                        match row.try_get::<String, _>(#column_name) {
+                        match row.try_get::<String, _>(#alias_name).or_else(|_| row.try_get::<String, _>(#column_name)) {
                             Ok(s) => s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                            Err(e) => return Err(e) // Propagate error
+                            Err(e) => return Err(e)
                         }
                     };
                  }
              }
         } else if sql_type == "UUID" {
-             // For UUID, we try string parse first (text DBs), then fallback to direct decode (binary DBs like Postgres)
+             // For UUID, we try string parse first
              if is_nullable {
                  if let Some(inner_type) = get_inner_type(field_type) {
                      quote! {
                         let #field_name: #field_type = {
-                            match row.try_get::<Option<String>, _>(#column_name) {
+                            match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name)) {
                                 Ok(Some(s)) => {
                                     match s.parse::<#inner_type>() {
                                         Ok(v) => Some(v),
@@ -261,31 +263,34 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                                     }
                                 },
                                 Ok(None) => None,
-                                Err(_) => row.try_get(#column_name)? // Fallback for binary UUID
+                                Err(e) => return Err(e)
                             }
                         };
                      }
                  } else {
-                     quote! { let #field_name: #field_type = row.try_get(#column_name)?; }
+                     quote! { let #field_name: #field_type = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?; }
                  }
              } else {
                  quote! {
                     let #field_name: #field_type = {
-                        match row.try_get::<String, _>(#column_name) {
+                        match row.try_get::<String, _>(#alias_name).or_else(|_| row.try_get::<String, _>(#column_name)) {
                             Ok(s) => s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                            Err(_) => row.try_get(#column_name)? // Fallback for binary UUID
+                            Err(e) => return Err(e)
                         }
                     };
                  }
              }
         } else {
             quote! {
-                let #field_name: #field_type = row.try_get(#column_name)?;
+                let #field_name: #field_type = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?;
             }
         }
     });
 
     let field_names_construct = fields.named.iter().map(|f| &f.ident);
+    // We need to clone the logic for the second implementation as iterator is consumed
+    let from_row_logic_clone = from_row_logic.clone();
+    let field_names_construct_clone = field_names_construct.clone();
 
     // ========================================================================
     // Generate Fields Module for Autocomplete
@@ -361,6 +366,17 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
 
                  Ok(#struct_name {
                      #(#field_names_construct),*
+                 })
+             }
+        }
+
+        impl bottle_orm::any_struct::FromAnyRow for #struct_name {
+             fn from_any_row(row: &sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+                 use sqlx::Row;
+                 #(#from_row_logic_clone)*
+
+                 Ok(#struct_name {
+                     #(#field_names_construct_clone),*
                  })
              }
         }

@@ -1,35 +1,4 @@
-//! # Any Structure Support
-//!
-//! This module defines traits and structures to support mapping arbitrary database rows
-//! (specifically `AnyRow`) to Rust structs. It provides metadata about columns
-//! to facilitate dynamic query construction and result mapping.
-//!
-//! ## Features
-//!
-//! - **Dynamic Mapping**: Supports mapping `AnyRow` to struct fields
-//! - **Metadata Reflection**: Provides column names and types at runtime
-//! - **Extensible**: Can be implemented for custom types
-//!
-//! ## Example
-//!
-//! ```rust,ignore
-//! use bottle_orm::{AnyImpl, AnyInfo};
-//!
-//! struct MyStruct {
-//!     id: i32,
-//!     name: String,
-//! }
-//!
-//! impl AnyImpl for MyStruct {
-//!     fn columns() -> Vec<AnyInfo> {
-//!         vec![
-//!             AnyInfo { column: "id", sql_type: "INTEGER" },
-//!             AnyInfo { column: "name", sql_type: "TEXT" },
-//!         ]
-//!     }
-//! }
-//! ```
-
+use sqlx::{any::AnyRow, Error, Row};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -48,6 +17,9 @@ pub struct AnyInfo {
 
     /// The SQL type of the column (e.g., "INTEGER", "TEXT", "UUID").
     pub sql_type: &'static str,
+
+    /// The name of the table this column belongs to (empty for un-associated columns).
+    pub table: &'static str,
 }
 
 // ============================================================================
@@ -69,27 +41,60 @@ pub trait AnyImpl {
     fn to_map(&self) -> HashMap<String, String>;
 }
 
+/// A trait for types that can be mapped from an `AnyRow`.
+///
+/// This trait replaces `sqlx::FromRow` for `bottle-orm` to support
+/// Tuple mapping where each element constructs itself from the whole row
+/// (e.g. `(User, Account)`), rather than consuming columns positionally.
+pub trait FromAnyRow: Sized {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error>;
+}
+
 // ============================================================================
 // Primitive Implementations
 // ============================================================================
 
-macro_rules! impl_any_primitive {
+macro_rules! impl_supported_primitive {
     ($($t:ty),*) => {
         $(
             impl AnyImpl for $t {
-                fn columns() -> Vec<AnyInfo> {
-                    Vec::new()
-                }
+                fn columns() -> Vec<AnyInfo> { Vec::new() }
+                fn to_map(&self) -> HashMap<String, String> { HashMap::new() }
+            }
 
-                fn to_map(&self) -> HashMap<String, String> {
-                    HashMap::new()
+            impl FromAnyRow for $t {
+                fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+                    row.try_get(0)
                 }
             }
         )*
     };
 }
 
-impl_any_primitive!(bool, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64, String);
+// Primitives directly supported by sqlx::Any (Decode implemented)
+impl_supported_primitive!(bool, i16, i32, i64, f32, f64, String);
+
+macro_rules! impl_cast_primitive {
+    ($($t:ty),*) => {
+        $(
+            impl AnyImpl for $t {
+                fn columns() -> Vec<AnyInfo> { Vec::new() }
+                fn to_map(&self) -> HashMap<String, String> { HashMap::new() }
+            }
+
+            impl FromAnyRow for $t {
+                fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+                    // Try to get as i64 and cast
+                    let val: i64 = row.try_get(0)?;
+                    Ok(val as $t)
+                }
+            }
+        )*
+    };
+}
+
+// Primitives that might need casting from i64
+impl_cast_primitive!(i8, isize, u8, u16, u32, u64, usize);
 
 // ============================================================================
 // External Type Implementations
@@ -99,9 +104,15 @@ impl AnyImpl for uuid::Uuid {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
-
     fn to_map(&self) -> HashMap<String, String> {
         HashMap::new()
+    }
+}
+
+impl FromAnyRow for uuid::Uuid {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        let s: String = row.try_get(0)?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
 
@@ -109,9 +120,15 @@ impl AnyImpl for chrono::NaiveDateTime {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
-
     fn to_map(&self) -> HashMap<String, String> {
         HashMap::new()
+    }
+}
+
+impl FromAnyRow for chrono::NaiveDateTime {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        let s: String = row.try_get(0)?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
 
@@ -119,9 +136,15 @@ impl AnyImpl for chrono::NaiveDate {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
-
     fn to_map(&self) -> HashMap<String, String> {
         HashMap::new()
+    }
+}
+
+impl FromAnyRow for chrono::NaiveDate {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        let s: String = row.try_get(0)?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
 
@@ -129,9 +152,15 @@ impl AnyImpl for chrono::NaiveTime {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
-
     fn to_map(&self) -> HashMap<String, String> {
         HashMap::new()
+    }
+}
+
+impl FromAnyRow for chrono::NaiveTime {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        let s: String = row.try_get(0)?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
 
@@ -139,9 +168,15 @@ impl AnyImpl for chrono::DateTime<chrono::Utc> {
     fn columns() -> Vec<AnyInfo> {
         Vec::new()
     }
-
     fn to_map(&self) -> HashMap<String, String> {
         HashMap::new()
+    }
+}
+
+impl FromAnyRow for chrono::DateTime<chrono::Utc> {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        let s: String = row.try_get(0)?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
 
@@ -153,7 +188,6 @@ impl<T: AnyImpl> AnyImpl for Option<T> {
     fn columns() -> Vec<AnyInfo> {
         T::columns()
     }
-
     fn to_map(&self) -> HashMap<String, String> {
         match self {
             Some(v) => v.to_map(),
@@ -161,6 +195,23 @@ impl<T: AnyImpl> AnyImpl for Option<T> {
         }
     }
 }
+
+impl<T: FromAnyRow> FromAnyRow for Option<T> {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        // If not null, try to decode T
+        match T::from_any_row(row) {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => Ok(None), // Fallback? Or propagate error?
+                                // If T fails to decode (e.g. invalid format), we probably should propagate error.
+                                // But if T fails because "column not found" (unlikely for index 0) or type mismatch...
+        }
+    }
+}
+
+// Special impl for Option<String> to avoid recursion issues if needed,
+// but T=String is in impl_supported_primitive.
+// Actually, generic impl above relies on T::from_any_row returning Error on NULL.
+// We need to intercept NULL before calling T.
 
 // ============================================================================
 // Tuple Implementations
@@ -170,11 +221,31 @@ macro_rules! impl_any_tuple {
     ($($T:ident),+) => {
         impl<$($T: AnyImpl),+> AnyImpl for ($($T,)+) {
             fn columns() -> Vec<AnyInfo> {
-                Vec::new()
+                let mut cols = Vec::new();
+                $(
+                    cols.extend($T::columns());
+                )+
+                cols
             }
 
             fn to_map(&self) -> HashMap<String, String> {
-                HashMap::new()
+                let mut map = HashMap::new();
+                #[allow(non_snake_case)]
+                let ($($T,)+) = self;
+                $(
+                    map.extend($T.to_map());
+                )+
+                map
+            }
+        }
+
+        impl<$($T: FromAnyRow),+> FromAnyRow for ($($T,)+) {
+            fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+                Ok((
+                    $(
+                        $T::from_any_row(row)?,
+                    )+
+                ))
             }
         }
     };

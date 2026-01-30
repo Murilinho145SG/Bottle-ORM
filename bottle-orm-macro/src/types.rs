@@ -140,8 +140,8 @@ pub fn rust_type_to_sql(ty: &Type) -> (String, bool) {
                 "i16" => ("SMALLINT".to_string(), false),
                 // i8 → SMALLINT (1-byte signed integer, mapped to smallint)
                 "i8" => ("SMALLINT".to_string(), false),
-                
-                // Unsigned integers (Note: SQL standard doesn't strictly support unsigned, 
+
+                // Unsigned integers (Note: SQL standard doesn't strictly support unsigned,
                 // typically mapped to same size signed or larger if needed, but here mapping direct)
                 "u32" => ("INTEGER".to_string(), false),
                 "u64" => ("BIGINT".to_string(), false),
