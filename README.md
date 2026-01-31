@@ -117,6 +117,90 @@ let adults: Vec<User> = db.model::<User>()
 - `update_time`: Auto-updates timestamp on modification (future feature).
 - `foreign_key = "Table::Column"`: Creates a Foreign Key relationship.
 - `size = N`: Sets the column size (e.g., `VARCHAR(N)`).
+- `omit`: Excludes the column from SELECT * queries by default.
+- `soft_delete`: Marks the column for soft delete functionality.
+
+## Soft Delete
+
+Bottle ORM supports soft delete out of the box. Mark a timestamp column with `#[orm(soft_delete)]` to enable automatic filtering of deleted records.
+
+```rust
+use bottle_orm::{Database, Model, Op};
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
+#[derive(Model, Debug, Clone)]
+struct User {
+    #[orm(primary_key)]
+    id: Uuid,
+    username: String,
+    #[orm(soft_delete)]
+    deleted_at: Option<DateTime<Utc>>,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = Database::connect("sqlite::memory:").await?;
+    db.migrator().register::<User>().run().await?;
+
+    let user = User {
+        id: Uuid::new_v4(),
+        username: "john".to_string(),
+        deleted_at: None,
+    };
+    db.model::<User>().insert(&user).await?;
+
+    // Soft delete (sets deleted_at timestamp)
+    db.model::<User>().filter("id", Op::Eq, user.id.to_string()).delete().await?;
+
+    // Standard queries exclude deleted records
+    let active: Vec<User> = db.model::<User>().scan().await?;
+    assert_eq!(active.len(), 0);
+
+    // Include deleted records
+    let all: Vec<User> = db.model::<User>().with_deleted().scan().await?;
+    assert_eq!(all.len(), 1);
+
+    // Permanently delete
+    db.model::<User>()
+        .filter("id", Op::Eq, user.id.to_string())
+        .with_deleted()
+        .hard_delete()
+        .await?;
+
+    Ok(())
+}
+```
+
+## Typed Operators
+
+Use the `Op` enum for type-safe filter operations with IDE autocomplete support.
+
+```rust
+use bottle_orm::Op;
+
+// With autocomplete support
+let users: Vec<User> = db.model::<User>()
+    .filter(user_fields::AGE, Op::Gte, 18)
+    .filter(user_fields::NAME, Op::Like, "%John%")
+    .scan()
+    .await?;
+```
+
+### Available Operators
+
+| Operator | SQL |
+|----------|-----|
+| `Op::Eq` | `=` |
+| `Op::Ne` | `!=` |
+| `Op::Gt` | `>` |
+| `Op::Gte` | `>=` |
+| `Op::Lt` | `<` |
+| `Op::Lte` | `<=` |
+| `Op::Like` | `LIKE` |
+| `Op::NotLike` | `NOT LIKE` |
+| `Op::In` | `IN` |
+| `Op::NotIn` | `NOT IN` |
 
 ## UUID Support (Versions 1-7)
 
