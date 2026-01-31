@@ -172,6 +172,9 @@ pub struct QueryBuilder<'a, T, E> {
     /// Columns to omit from the query results (inverse of select_columns)
     pub(crate) omit_columns: Vec<String>,
 
+    /// Whether to include soft-deleted records in the query
+    pub(crate) with_deleted: bool,
+
     /// PhantomData to bind the generic type T
     pub(crate) _marker: PhantomData<&'a T>,
 }
@@ -239,6 +242,7 @@ where
             omit_columns,
             limit: None,
             offset: None,
+            with_deleted: false,
             _marker: PhantomData,
         }
     }
@@ -351,6 +355,111 @@ where
         V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
     {
         self.filter(col, "=", value)
+    }
+
+    /// Adds an IS NULL clause to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to check
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// query.is_null("deleted_at")
+    /// ```
+    pub fn is_null(mut self, col: &'static str) -> Self {
+        let clause: FilterFn = Box::new(move |query, _args, _driver, _arg_counter| {
+            query.push_str(" AND ");
+            if let Some((table, column)) = col.split_once(".") {
+                query.push_str(&format!("\"{}\".\"{}\"", table, column));
+            } else {
+                query.push_str(&format!("\"{}\"", col));
+            }
+            query.push_str(" IS NULL");
+        });
+
+        self.where_clauses.push(clause);
+        self
+    }
+
+    /// Adds an IS NOT NULL clause to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to check
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// query.is_not_null("deleted_at")
+    /// ```
+    pub fn is_not_null(mut self, col: &'static str) -> Self {
+        let clause: FilterFn = Box::new(move |query, _args, _driver, _arg_counter| {
+            query.push_str(" AND ");
+            if let Some((table, column)) = col.split_once(".") {
+                query.push_str(&format!("\"{}\".\"{}\"", table, column));
+            } else {
+                query.push_str(&format!("\"{}\"", col));
+            }
+            query.push_str(" IS NOT NULL");
+        });
+
+        self.where_clauses.push(clause);
+        self
+    }
+
+    /// Disables the default soft delete filter.
+    ///
+    /// When called, soft-deleted records (where soft_delete column IS NOT NULL)
+    /// will be included in the results.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Include deleted users
+    /// db.model::<User>().with_deleted().scan().await?;
+    /// ```
+    pub fn with_deleted(mut self) -> Self {
+        self.with_deleted = true;
+        // If we have a soft delete column, we need to remove the default "IS NULL" filter
+        // The default filter is always added first in new(), so it should be the first ONE
+        // if no other filters were added before calling with_deleted().
+        // However, user might chain filters: model().filter(..).with_deleted()
+        // So we need to be careful.
+        // Simplified approach: Clear existing WHERE clauses if it's just the default one? 
+        // No, that's dangerous.
+        
+        // Better approach: filter out the specific IS NULL clause for the soft delete column?
+        // It's hard to identify closures.
+        
+        // ALTERNATIVE: Don't add the filter in new(). Add it at build time (scan/first/count) IF with_deleted is false.
+        // But `delete()` needs to know about it too.
+        
+        // Let's revise the strategy:
+        // We removed the 'add filter in new' logic?
+        // No, I already added it in the previous step.
+        // We need a way to clear it.
+        // Since `FilterFn` is opaque, we can't easily remove it.
+        
+        // REVERT STRATEGY: 
+        // 1. Remove the "add filter in new" logic I just added (or modify it).
+        // 2. Instead, add the filter lazily in `first()`, `scan()`, `count()`, `scalar()`, `delete()` etc.
+        //    ONLY IF `with_deleted` is false.
+        
+        // But wait, `new` added it to `where_clauses`. I can't remove it easily.
+        // I should have waited.
+        
+        // Correct fix:
+        // Update `new` to NOT add the closure directly.
+        // Instead, we will add a check in `scan`, `first`, etc.
+        
+        // BUT, `delete()` behaves differently (UPDATES instead of DELETE).
+        
+        // Let's go with Lazy Application.
+        // I will undo the change in `new` in the next step or modify `new` again.
+        // For now let's implement these methods.
+        self
     }
 
     /// Adds an ORDER BY clause to the query.
@@ -1367,6 +1476,13 @@ where
     where
         R: FromAnyRow + AnyImpl + Send + Unpin,
     {
+        // Apply default soft delete filter if enabled
+        if !self.with_deleted {
+             if let Some(soft_delete_col) = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name) {
+                  self = self.is_null(soft_delete_col);
+             }
+        }
+
         // Build SELECT clause
         let mut query = String::from("SELECT ");
 
@@ -1503,6 +1619,13 @@ where
     where
         R: FromAnyRow + AnyImpl + Send + Unpin,
     {
+        // Apply default soft delete filter if enabled
+        if !self.with_deleted {
+             if let Some(soft_delete_col) = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name) {
+                  self = self.is_null(soft_delete_col);
+             }
+        }
+
         // Build SELECT clause
         let mut query = String::from("SELECT ");
 
@@ -1600,6 +1723,13 @@ where
     where
         O: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
+        // Apply default soft delete filter if enabled
+        if !self.with_deleted {
+             if let Some(soft_delete_col) = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name) {
+                  self = self.is_null(soft_delete_col);
+             }
+        }
+
         // Build SELECT clause
         let mut query = String::from("SELECT ");
 
@@ -1733,6 +1863,22 @@ where
         &'b mut self,
         data_map: std::collections::HashMap<String, String>,
     ) -> BoxFuture<'b, Result<u64, sqlx::Error>> {
+        // Apply default soft delete filter if enabled
+        if !self.with_deleted {
+             if let Some(soft_delete_col) = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name) {
+                 let clause: FilterFn = Box::new(move |query, _args, _driver, _arg_counter| {
+                    query.push_str(" AND ");
+                    if let Some((table, column)) = soft_delete_col.split_once(".") {
+                        query.push_str(&format!("\"{}\".\"{}\"", table, column));
+                    } else {
+                        query.push_str(&format!("\"{}\"", soft_delete_col));
+                    }
+                    query.push_str(" IS NULL");
+                 });
+                 self.where_clauses.push(clause);
+             }
+        }
+
         Box::pin(async move {
             let table_name = self.table_name.to_snake_case();
             let mut query = format!("UPDATE \"{}\" SET ", table_name);
@@ -1817,11 +1963,78 @@ where
 
     /// Executes a DELETE query based on the current filters.
     ///
+    /// If the model assumes Soft Delete (has a `#[orm(soft_delete)]` column),
+    /// this method acts as an UPDATE, setting the soft delete column to the current time.
+    /// Otherwise, it performs a physical DELETE.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(u64)` - The number of rows deleted (or updated)
+    /// * `Err(sqlx::Error)` - Database error
+    pub async fn delete(mut self) -> Result<u64, sqlx::Error> {
+        // Check for soft delete column
+        let soft_delete_col = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name);
+
+        if let Some(col) = soft_delete_col {
+            // Soft Delete: Update the column to NOW()
+            let table_name = self.table_name.to_snake_case();
+            let mut query = format!("UPDATE \"{}\" SET \"{}\" = ", table_name, col);
+
+            match self.driver {
+                Drivers::Postgres => query.push_str("NOW()"),
+                Drivers::SQLite => query.push_str("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"),
+                Drivers::MySQL => query.push_str("NOW()"),
+            }
+
+            query.push_str(" WHERE 1=1");
+
+            let mut args = AnyArguments::default();
+            let mut arg_counter = 1;
+
+            // Apply filters
+            for clause in &self.where_clauses {
+                clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+            }
+
+            // Print SQL query to logs if debug mode is active
+            if self.debug_mode {
+                log::debug!("SQL: {}", query);
+            }
+
+            let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
+            Ok(result.rows_affected())
+        } else {
+            // Standard Delete
+            let mut query = String::from("DELETE FROM \"");
+            query.push_str(&self.table_name.to_snake_case());
+            query.push_str("\" WHERE 1=1");
+
+            let mut args = AnyArguments::default();
+            let mut arg_counter = 1;
+
+            for clause in &self.where_clauses {
+                clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+            }
+
+            // Print SQL query to logs if debug mode is active
+            if self.debug_mode {
+                log::debug!("SQL: {}", query);
+            }
+
+            let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
+            Ok(result.rows_affected())
+        }
+    }
+
+    /// Permanently removes records from the database.
+    ///
+    /// This method performs a physical DELETE, ignoring the soft_delete flag.
+    ///
     /// # Returns
     ///
     /// * `Ok(u64)` - The number of rows deleted
     /// * `Err(sqlx::Error)` - Database error
-    pub async fn delete(mut self) -> Result<u64, sqlx::Error> {
+    pub async fn hard_delete(mut self) -> Result<u64, sqlx::Error> {
         let mut query = String::from("DELETE FROM \"");
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" WHERE 1=1");

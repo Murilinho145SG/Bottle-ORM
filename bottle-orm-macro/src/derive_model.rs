@@ -81,6 +81,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let mut unique = false;
         let mut index = false;
         let mut omit = false;
+        let mut soft_delete = false;
         let mut foreign_table_tokens = quote! { None };
         let mut foreign_key_tokens = quote! { None };
 
@@ -126,6 +127,9 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                     if meta.path.is_ident("omit") {
                         omit = true;
                     }
+                    if meta.path.is_ident("soft_delete") {
+                        soft_delete = true;
+                    }
                     Ok(())
                 })
                 .expect("Failed to parse orm attributes");
@@ -149,7 +153,8 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                  index: #index,
                  foreign_table: #foreign_table_tokens,
                  foreign_key: #foreign_key_tokens,
-                 omit: #omit
+                 omit: #omit,
+                 soft_delete: #soft_delete
             }
         }
     });

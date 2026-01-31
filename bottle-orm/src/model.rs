@@ -328,6 +328,13 @@ pub struct ColumnInfo {
     /// // This field will not be included in SELECT * queries
     /// ```
     pub omit: bool,
+
+    /// Whether this column acts as a Soft Delete flag.
+    ///
+    /// Set via `#[orm(soft_delete)]` attribute.
+    /// - If true, rows with non-null values in this column are excluded by default.
+    /// - `delete()` operations will update this column instead of removing the row.
+    pub soft_delete: bool,
 }
 
 // ============================================================================
@@ -574,6 +581,7 @@ mod tests {
             foreign_table: None,
             foreign_key: None,
             omit: false,
+            soft_delete: false,
         };
 
         assert_eq!(col.name, "test_column");
@@ -596,6 +604,7 @@ mod tests {
             foreign_table: Some("User"),
             foreign_key: Some("id"),
             omit: false,
+            soft_delete: false,
         };
 
         assert_eq!(col.foreign_table, Some("User"));
