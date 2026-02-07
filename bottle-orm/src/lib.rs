@@ -151,7 +151,7 @@ pub use transaction::Transaction;
 ///
 /// `QueryBuilder` provides a fluent interface for building SELECT and INSERT
 /// queries with filtering, ordering, and pagination capabilities.
-pub use query_builder::QueryBuilder;
+pub use query_builder::{Op, QueryBuilder};
 
 /// Re-export of the `Migrator` for schema migration management.
 ///
