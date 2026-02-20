@@ -1,6 +1,6 @@
 [package]
 name = "bottle-orm"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2024"
 authors = ["Murilinho145SG"]
 description = "A lightweight and simple ORM for Rust built on top of sqlx"
@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/Murilinho145SG/bottle-orm"
 
 [dependencies]
-bottle-orm-macro = { version = "0.4.6", path = "../bottle-orm-macro" }
+bottle-orm-macro = { version = "0.4.7", path = "../bottle-orm-macro" }
 sqlx = { version = "0.8.6", features = [
 	"runtime-tokio-native-tls",
 	"any",

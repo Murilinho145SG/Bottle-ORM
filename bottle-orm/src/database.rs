@@ -550,6 +550,7 @@ impl Database {
 
         let mut column_defs = Vec::new();
         let mut index_statements = Vec::new();
+        let mut primary_keys = Vec::new(); // Track primary key columns to support composite keys
 
         // Build column definitions
         for col in &columns {
@@ -557,13 +558,13 @@ impl Database {
             let col_name = col.name.strip_prefix("r#").unwrap_or(col.name).to_snake_case();
             let mut def = format!("\"{}\" {}", col_name, col.sql_type);
 
-            // Add PRIMARY KEY constraint
+            // Collect primary key columns to be added as a table constraint later
             if col.is_primary_key {
-                def.push_str(" PRIMARY KEY");
+                primary_keys.push(col_name.clone());
             }
 
-            // Add NOT NULL constraint (except for primary keys, which are implicitly NOT NULL)
-            if !col.is_nullable && !col.is_primary_key {
+            // Ensure non-nullable columns and primary keys are marked as NOT NULL
+            if !col.is_nullable || col.is_primary_key {
                 def.push_str(" NOT NULL");
             }
 
@@ -593,6 +594,14 @@ impl Database {
             }
         }
 
+        // Add PRIMARY KEY constraint if any columns were marked as primary keys
+        if !primary_keys.is_empty() {
+            let pk_columns = primary_keys.iter().map(|pk| format!("\"{}\"", pk)).collect::<Vec<_>>().join(", ");
+
+            let pk_constraint = format!("PRIMARY KEY ({})", pk_columns);
+            column_defs.push(pk_constraint);
+        }
+
         // Add SQLite Foreign Keys inline (SQLite doesn't support ADD CONSTRAINT)
         if let Drivers::SQLite = self.driver {
             for col in &columns {
@@ -611,8 +620,7 @@ impl Database {
         }
 
         // Build and execute CREATE TABLE statement
-        let create_table_query =
-            format!("CREATE TABLE IF NOT EXISTS \"{}\" ({})", table_name.to_snake_case(), column_defs.join(", "));
+        let create_table_query = format!("CREATE TABLE IF NOT EXISTS \"{}\" ({})", table_name, column_defs.join(", "));
         log::info!("{}", create_table_query);
 
         sqlx::query(&create_table_query).execute(&self.pool).await?;

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-02-20
+
+### Added
+
+- **Composite Primary Key Support**: Enhanced `create_table` to support composite primary keys by collecting all primary key columns and defining them as a table-level constraint.
+- **Improved Code Documentation**: Added comprehensive English comments to the core database management logic, specifically around schema generation and constraint handling.
+
+### Fixed
+
+- **Create Table Syntax**: Fixed `CREATE TABLE` query assembly to properly handle table constraints and ensure correct column definitions for primary keys across different database drivers.
+- **NOT NULL Constraints**: Refined `NOT NULL` logic to ensure that primary key columns are always marked as non-nullable, even when not explicitly specified in the model.
+
 ## [0.4.6] - 2026-01-30
 
 ### Added
