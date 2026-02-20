@@ -328,6 +328,21 @@ pub struct ColumnInfo {
     /// // This field will not be included in SELECT * queries
     /// ```
     pub omit: bool,
+
+    /// Whether this field is used for soft delete functionality.
+    ///
+    /// Set via `#[orm(soft_delete)]` attribute. When `true`, this column
+    /// will be used to track deletion timestamps. Queries will automatically
+    /// filter out records where this column is not NULL.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[orm(soft_delete)]
+    /// deleted_at: Option<DateTime<Utc>>,
+    /// // soft_delete: true
+    /// // Records with deleted_at set will be excluded from queries
+    /// ```
+    pub soft_delete: bool,
 }
 
 // ============================================================================
@@ -574,6 +589,7 @@ mod tests {
             foreign_table: None,
             foreign_key: None,
             omit: false,
+            soft_delete: false,
         };
 
         assert_eq!(col.name, "test_column");
@@ -596,6 +612,7 @@ mod tests {
             foreign_table: Some("User"),
             foreign_key: Some("id"),
             omit: false,
+            soft_delete: false,
         };
 
         assert_eq!(col.foreign_table, Some("User"));
