@@ -30,7 +30,7 @@
 //! }
 //! ```
 
-use crate::{any_struct::FromAnyRow, database::Connection, model::Model, query_builder::QueryBuilder, AnyImpl};
+use crate::{AnyImpl, any_struct::FromAnyRow, database::Connection, model::Model, query_builder::QueryBuilder};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
@@ -46,6 +46,10 @@ pub struct Pagination {
     /// The number of items per page. Default: 10.
     #[serde(default = "default_limit")]
     pub limit: usize,
+
+    /// The maximum allowed limit for pagination to prevent large result sets.
+    /// If the requested `limit` exceeds `max_limit`, it will be capped (default: 100).
+    pub max_limit: usize,
 }
 
 /// A wrapper for paginated results.
@@ -72,20 +76,26 @@ fn default_limit() -> usize {
 
 impl Default for Pagination {
     fn default() -> Self {
-        Self { page: 0, limit: 10 }
+        Self { page: 0, limit: 10, max_limit: 100 }
     }
 }
 
 impl Pagination {
-    /// Creates a new Pagination instance.
-    pub fn new(page: usize, limit: usize) -> Self {
-        Self { page, limit }
+    /// Creates a new Pagination instance with a specified max_limit.
+    ///
+    /// If `limit` is greater than `max_limit`, it defaults to 10.
+    pub fn new(page: usize, mut limit: usize, max_limit: usize) -> Self {
+    	if limit > max_limit {
+     		limit = 10;
+     	}
+        Self { page, limit, max_limit }
     }
 
     /// Applies the pagination to a `QueryBuilder`.
     ///
     /// This method sets the `limit` and `offset` of the query builder
-    /// based on the pagination parameters.
+    /// based on the pagination parameters. It also enforces the `max_limit`
+    /// check before applying the limit.
     ///
     /// # Arguments
     ///
@@ -94,11 +104,15 @@ impl Pagination {
     /// # Returns
     ///
     /// The modified `QueryBuilder`
-    pub fn apply<'a, T, E>(self, query: QueryBuilder<'a, T, E>) -> QueryBuilder<'a, T, E>
+    pub fn apply<'a, T, E>(mut self, query: QueryBuilder<'a, T, E>) -> QueryBuilder<'a, T, E>
     where
         T: Model + Send + Sync + Unpin,
         E: Connection + Send,
     {
+        // Enforce max_limit again during application to ensure safety
+        if self.limit > self.max_limit {
+        	self.limit = 10;
+        }
         query.limit(self.limit).offset(self.page * self.limit)
     }
 
