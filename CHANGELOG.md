@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-02-25
+
+### Added
+- **Pagination `max_limit`**: Introduced `max_limit` field to `Pagination` struct to enforce a maximum number of items per page (default: 100).
+- **Limit Enforcement**: Updated `Pagination::new` and `Pagination::apply` to automatically cap the `limit` at `max_limit`, defaulting to 10 if exceeded.
+
+### Changed
+- **Query Builder `select`**: Removed automatic `to_snake_case()` conversion in `QueryBuilder::select()`. This allows for more flexible column naming, especially when using aliases or raw SQL fragments in the select clause.
+- **Version Bump**: Updated all crates to `0.4.8`.
+
 ## [0.4.7] - 2026-02-20
 
 ### Added
