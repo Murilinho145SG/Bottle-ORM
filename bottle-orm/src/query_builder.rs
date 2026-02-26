@@ -969,8 +969,10 @@ where
     /// Selects specific columns to return.
     ///
     /// By default, queries use `SELECT *` to return all columns. This method
-    /// allows you to specify exactly which columns should be returned, which can
-    /// improve performance for tables with many or large columns.
+    /// allows you to specify exactly which columns should be returned.
+    ///
+    /// **Note:** Columns are pushed exactly as provided, without automatic
+    /// snake_case conversion, allowing for aliases and raw SQL fragments.
     ///
     /// # Arguments
     ///
@@ -985,16 +987,11 @@ where
     /// // Select multiple columns
     /// query.select("id, username, email")
     ///
-    /// // Select with SQL functions
-    /// query.select("COUNT(*) as total")
-    ///
-    /// // Chain multiple select calls (all will be included)
-    /// query
-    ///     .select("id, username")
-    ///     .select("created_at")
+    /// // Select with SQL functions and aliases (now supported)
+    /// query.select("COUNT(*) as total_count")
     /// ```
     pub fn select(mut self, columns: &str) -> Self {
-        self.select_columns.push(columns.to_string().to_snake_case());
+        self.select_columns.push(columns.to_string());
         self
     }
 
