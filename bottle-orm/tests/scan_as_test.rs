@@ -22,6 +22,69 @@ struct UserDTO {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Model, PartialEq)]
+struct Profile {
+    #[orm(primary_key)]
+    id: Uuid,
+    #[orm(foreign_key = "User::id")]
+    user_id: Uuid,
+    bio: String,
+    last_login: DateTime<Utc>,
+}
+
+#[derive(Debug, FromAnyRow, Serialize, Deserialize)]
+struct UserProfileDTO {
+    username: String,
+    bio: String,
+    last_login: DateTime<Utc>,
+}
+
+#[tokio::test]
+async fn test_scan_as_with_joins() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let db = Database::builder().max_connections(1).connect("sqlite::memory:").await?;
+
+    db.migrator()
+        .register::<User>()
+        .register::<Profile>()
+        .run().await?;
+
+    let user_id = Uuid::new_v4();
+    let user = User {
+        id: user_id,
+        username: "join_user".to_string(),
+        email: "join@example.com".to_string(),
+        age: 30,
+        created_at: Utc::now(),
+    };
+    db.model::<User>().insert(&user).await?;
+
+    let profile = Profile {
+        id: Uuid::new_v4(),
+        user_id,
+        bio: "Rust Developer".to_string(),
+        last_login: Utc::now(),
+    };
+    db.model::<Profile>().insert(&profile).await?;
+
+    // Test scan_as with INNER JOIN
+    let results: Vec<UserProfileDTO> = db.model::<User>()
+        .inner_join("profile", "profile.user_id = user.id")
+        .select("user.username")
+        .select("profile.bio")
+        .select("profile.last_login")
+        .debug()
+        .scan_as::<UserProfileDTO>()
+        .await?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].username, "join_user");
+    assert_eq!(results[0].bio, "Rust Developer");
+    
+    println!("Join test passed!");
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -43,9 +106,9 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
         db.model::<User>().insert(&user).await?;
     }
 
-    // 4. Test scan_as
+    // 4. Test scan_as with user.*
     let dtos: Vec<UserDTO> = db.model::<User>()
-        .select("username, age, created_at")
+        .select("user.*")
         .filter("age", bottle_orm::Op::Gt, 30)
         .order("age ASC")
         .debug()
@@ -61,11 +124,10 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
     }
     assert_eq!(dtos[0].username, "user11"); // 20 + 11 = 31
 
-    // 5. Test paginate_as
+    // 5. Test paginate_as with empty select (should use DTO fields)
     let pagination = Pagination::new(0, 5, 100);
     let paginated = pagination.paginate_as::<User, _, UserDTO>(
         db.model::<User>()
-            .select("username, age, created_at")
             .order("username ASC")
     ).await?;
 
@@ -88,8 +150,6 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
     
     assert_eq!(paginated_page1.data.len(), 5);
     assert_eq!(paginated_page1.page, 1);
-    // user1, user10, user11, user12, user13 are first 5 in Lexicographical order? 
-    // user1, user10, user11, user12, user13, user14, user15, user2, ...
     
     println!("Scan_as and Paginate_as tests passed successfully!");
 

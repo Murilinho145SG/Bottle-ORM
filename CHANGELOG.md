@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.12] - 2026-02-27
+
+### Fixed
+- **Star Expansion in `scan_as`**: Fixed a bug where `user.*` or `*` in `.select()` would not expand columns, causing temporal types to fail on PostgreSQL because they weren't being cast to JSON.
+- **Empty Select in `scan_as`**: Improved `scan_as` to automatically generate a correct SELECT clause based on the DTO fields when no `.select()` is called, including proper table names and temporal casting.
+- **Table Name Resolution**: Fixed an issue where DTO table metadata could cause "table not found" errors when generating automatic SELECT clauses.
+
 ## [0.4.11] - 2026-02-27
 
 ### Fixed

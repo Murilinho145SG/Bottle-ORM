@@ -1644,59 +1644,142 @@ where
         }
     
         if self.select_columns.is_empty() {
-            query.push('*');
+            let mut select_args = Vec::new();
+            let struct_cols = R::columns();
+            let main_table_snake = self.table_name.to_snake_case();
+            
+            for c in struct_cols {
+                let c_name = c.column.to_snake_case();
+                
+                // Determine if we should use the table name from AnyInfo
+                // If it matches a joined table or the main table, we use it.
+                // Otherwise (like UserDTO), we default to the main table.
+                let mut table_to_use = main_table_snake.clone();
+                if !c.table.is_empty() {
+                    let c_table_snake = c.table.to_snake_case();
+                    if c_table_snake == main_table_snake || self.joins_clauses.iter().any(|j| j.contains(&format!("JOIN \"{}\"", c_table_snake))) {
+                        table_to_use = c_table_snake;
+                    }
+                }
+
+                if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
+                    select_args.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", table_to_use, c_name, c_name));
+                } else {
+                    select_args.push(format!("\"{}\".\"{}\" AS \"{}\"", table_to_use, c_name, c_name));
+                }
+            }
+
+            if select_args.is_empty() {
+                query.push('*');
+            } else {
+                query.push_str(&select_args.join(", "));
+            }
         } else {
             let mut select_cols = Vec::with_capacity(self.select_columns.capacity());
             let struct_cols = R::columns();
 
-            for col in &self.select_columns {
-                // Check if this column is temporal in the target DTO
-                let mut is_temporal = false;
-                
-                // We need to keep the lowercase string alive to use its slice in col_name
-                let col_lower = col.to_lowercase();
-                let mut col_name = col.as_str();
-                
-                // Handle aliases (e.g., "created_at as time" or "user.created_at as time")
-                if let Some((_, alias)) = col_lower.split_once(" as ") {
-                    col_name = alias.trim().trim_matches('"').trim_matches('\'');
-                } else if col.contains('.') {
-                    if let Some((_, actual_col)) = col.split_once('.') {
-                         col_name = actual_col.trim().trim_matches('"').trim_matches('\'');
-                    }
-                }
-
-                if let Some(info) = struct_cols.iter().find(|c| c.column.to_snake_case() == col_name.to_snake_case()) {
-                    if is_temporal_type(info.sql_type) {
-                        is_temporal = true;
-                    }
-                }
-
-                if !self.joins_clauses.is_empty() && col.contains('.') {
-                    if let Some((table, column)) = col.split_once('.') {
-                        let clean_table = table.trim().trim_matches('"');
-                        let clean_column = column.trim().trim_matches('"').split_whitespace().next().unwrap_or(column);
-
-                        if clean_column == "*" {
-                            select_cols.push(format!("\"{}\".*", clean_table));
-                        } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
-                            select_cols.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", clean_table, clean_column, col_name));
-                        } else {
-                            select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, clean_column, col_name));
+                        for col in &self.select_columns {
+                            let col_trimmed = col.trim();
+                            if col_trimmed == "*" {
+                                for c in &self.columns_info {
+                                    let c_name = c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case();
+                                    let mut is_c_temporal = false;
+                                    if let Some(r_info) = struct_cols.iter().find(|rc| rc.column.to_snake_case() == c_name) {
+                                        if is_temporal_type(r_info.sql_type) {
+                                            is_c_temporal = true;
+                                        }
+                                    }
+            
+                                    if is_c_temporal && matches!(self.driver, Drivers::Postgres) {
+                                        select_cols.push(format!(
+                                            "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                            self.table_name.to_snake_case(),
+                                            c_name,
+                                            c_name
+                                        ));
+                                    } else {
+                                        select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", self.table_name.to_snake_case(), c_name, c_name));
+                                    }
+                                }
+                                continue;
+                            }
+            
+                            // Check if this column is temporal in the target DTO
+                            let mut is_temporal = false;
+            
+                            // We need to keep the lowercase string alive to use its slice in col_name
+                            let col_lower = col_trimmed.to_lowercase();
+                            let mut col_name = col_trimmed;
+            
+                            // Handle aliases (e.g., "created_at as time" or "user.created_at as time")
+                            if let Some((_, alias)) = col_lower.split_once(" as ") {
+                                col_name = alias.trim().trim_matches('"').trim_matches('\'');
+                            } else if col_trimmed.contains('.') {
+                                if let Some((_, actual_col)) = col_trimmed.split_once('.') {
+                                    col_name = actual_col.trim().trim_matches('"').trim_matches('\'');
+                                }
+                            }
+            
+                            if let Some(info) = struct_cols.iter().find(|c| c.column.to_snake_case() == col_name.to_snake_case()) {
+                                if is_temporal_type(info.sql_type) {
+                                    is_temporal = true;
+                                }
+                            }
+            
+                            if col_trimmed.contains('.') {
+                                if let Some((table, column)) = col_trimmed.split_once('.') {
+                                    let clean_table = table.trim().trim_matches('"');
+                                    let clean_column = column.trim().trim_matches('"').split_whitespace().next().unwrap_or(column);
+            
+                                    if clean_column == "*" {
+                                        let mut expanded = false;
+                                        if clean_table.to_snake_case() == self.table_name.to_snake_case() {
+                                            for c in &self.columns_info {
+                                                let c_name = c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case();
+                                                let mut is_c_temporal = false;
+                                                if let Some(r_info) = struct_cols.iter().find(|rc| rc.column.to_snake_case() == c_name) {
+                                                    if is_temporal_type(r_info.sql_type) {
+                                                        is_c_temporal = true;
+                                                    }
+                                                }
+            
+                                                if is_c_temporal && matches!(self.driver, Drivers::Postgres) {
+                                                    select_cols.push(format!(
+                                                        "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                                        clean_table, c_name, c_name
+                                                    ));
+                                                } else {
+                                                    select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, c_name, c_name));
+                                                }
+                                            }
+                                            expanded = true;
+                                        }
+            
+                                        if !expanded {
+                                            select_cols.push(format!("\"{}\".*", clean_table));
+                                        }
+                                    } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
+                                        select_cols.push(format!(
+                                            "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                            clean_table, clean_column, col_name
+                                        ));
+                                    } else {
+                                        select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, clean_column, col_name));
+                                    }
+                                }
+                            } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
+                                // Extract column name from potential expression
+                                let clean_col = col_trimmed.trim_matches('"');
+                                select_cols.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", clean_col, col_name));
+                            } else if col_trimmed != col_name {
+                                select_cols.push(format!("{} AS \"{}\"", col_trimmed, col_name));
+                            } else {
+                                select_cols.push(col_trimmed.to_string());
+                            }
                         }
+                        query.push_str(&select_cols.join(", "));
                     }
-                } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
-                    // Extract column name from potential expression
-                    let clean_col = col.trim().trim_matches('"');
-                    select_cols.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", clean_col, col_name));
-                } else if col != col_name {
-                    select_cols.push(format!("{} AS \"{}\"", col, col_name));
-                } else {
-                    select_cols.push(col.clone());
-                }
-            }
-            query.push_str(&select_cols.join(", "));
-        }
+            
     
         // Build FROM clause
         query.push_str(" FROM \"");
