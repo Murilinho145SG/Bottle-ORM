@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "bottle-orm"
-version = "0.4.8"
+version = "0.4.9"
 dependencies = [
  "async-trait",
  "bottle-orm-macro",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "bottle-orm-macro"
-version = "0.4.8"
+version = "0.4.9"
 dependencies = [
  "heck",
  "proc-macro2",
