@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.11] - 2026-02-27
+
+### Fixed
+- **PostgreSQL Temporal Types in `scan_as`**: Fixed a bug where temporal types (like `DateTime<Utc>`) could not be decoded when using `scan_as` with the PostgreSQL driver. Added automatic `to_json` casting and aliasing for these types.
+- **DTO Mapping**: Improved alias handling in `scan_as` to ensure consistent mapping to DTO fields across all database drivers.
+
+### Changed
+- **`scan_as` Bound**: Now requires the target DTO to implement `AnyImpl` (automatically provided by `#[derive(FromAnyRow)]`) to support automatic type detection and casting.
+- **Version Bump**: Updated all crates to `0.4.11`.
+
 ## [0.4.10] - 2026-02-27
 
 ### Added

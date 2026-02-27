@@ -233,7 +233,7 @@ impl Pagination {
     where
         T: Model + Send + Sync + Unpin,
         E: Connection + Send,
-        R: FromAnyRow + Send + Unpin,
+        R: FromAnyRow + AnyImpl + Send + Unpin,
     {
         // 1. Prepare COUNT query
         let original_select = query.select_columns.clone();

@@ -1602,12 +1602,10 @@ where
     /// Executes the query and maps the result to a custom DTO.
     ///
     /// Ideal for JOINs and projections where the return type is not a full Model.
-    /// Unlike `scan`, this method does not require `R` to implement `AnyImpl`,
-    /// making it more flexible for custom result structures.
     ///
     /// # Type Parameters
     ///
-    /// * `R` - The target result type. Must implement `FromAnyRow`.
+    /// * `R` - The target result type. Must implement `FromAnyRow` and `AnyImpl`.
     ///
     /// # Returns
     ///
@@ -1631,7 +1629,7 @@ where
     /// ```
     pub async fn scan_as<R>(mut self) -> Result<Vec<R>, sqlx::Error>
     where
-        R: FromAnyRow + Send + Unpin,
+        R: FromAnyRow + AnyImpl + Send + Unpin,
     {
         // Apply default soft delete filter if not disabled
         if !self.with_deleted {
@@ -1649,16 +1647,50 @@ where
             query.push('*');
         } else {
             let mut select_cols = Vec::with_capacity(self.select_columns.capacity());
+            let struct_cols = R::columns();
+
             for col in &self.select_columns {
+                // Check if this column is temporal in the target DTO
+                let mut is_temporal = false;
+                
+                // We need to keep the lowercase string alive to use its slice in col_name
+                let col_lower = col.to_lowercase();
+                let mut col_name = col.as_str();
+                
+                // Handle aliases (e.g., "created_at as time" or "user.created_at as time")
+                if let Some((_, alias)) = col_lower.split_once(" as ") {
+                    col_name = alias.trim().trim_matches('"').trim_matches('\'');
+                } else if col.contains('.') {
+                    if let Some((_, actual_col)) = col.split_once('.') {
+                         col_name = actual_col.trim().trim_matches('"').trim_matches('\'');
+                    }
+                }
+
+                if let Some(info) = struct_cols.iter().find(|c| c.column.to_snake_case() == col_name.to_snake_case()) {
+                    if is_temporal_type(info.sql_type) {
+                        is_temporal = true;
+                    }
+                }
+
                 if !self.joins_clauses.is_empty() && col.contains('.') {
                     if let Some((table, column)) = col.split_once('.') {
-                        if column == "*" {
-                            // Trata corretamente o "table.*", sem colocar aspas no asterisco
-                            select_cols.push(format!("\"{}\".*", table));
+                        let clean_table = table.trim().trim_matches('"');
+                        let clean_column = column.trim().trim_matches('"').split_whitespace().next().unwrap_or(column);
+
+                        if clean_column == "*" {
+                            select_cols.push(format!("\"{}\".*", clean_table));
+                        } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
+                            select_cols.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", clean_table, clean_column, col_name));
                         } else {
-                            select_cols.push(format!("\"{}\".\"{}\"", table, column));
+                            select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, clean_column, col_name));
                         }
                     }
+                } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
+                    // Extract column name from potential expression
+                    let clean_col = col.trim().trim_matches('"');
+                    select_cols.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", clean_col, col_name));
+                } else if col != col_name {
+                    select_cols.push(format!("{} AS \"{}\"", col, col_name));
                 } else {
                     select_cols.push(col.clone());
                 }

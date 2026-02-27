@@ -19,10 +19,12 @@ struct User {
 struct UserDTO {
     username: String,
     age: i32,
+    created_at: DateTime<Utc>,
 }
 
 #[tokio::test]
 async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = env_logger::builder().is_test(true).try_init();
     // 1. Setup Database (SQLite in-memory)
     let db = Database::builder().max_connections(1).connect("sqlite::memory:").await?;
 
@@ -43,9 +45,10 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
 
     // 4. Test scan_as
     let dtos: Vec<UserDTO> = db.model::<User>()
-        .select("username, age")
+        .select("username, age, created_at")
         .filter("age", bottle_orm::Op::Gt, 30)
         .order("age ASC")
+        .debug()
         .scan_as::<UserDTO>()
         .await?;
 
@@ -53,6 +56,8 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
     assert!(dtos.len() > 0);
     for dto in &dtos {
         assert!(dto.age > 30);
+        // Verify created_at is populated
+        assert!(dto.created_at <= Utc::now());
     }
     assert_eq!(dtos[0].username, "user11"); // 20 + 11 = 31
 
@@ -60,7 +65,7 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
     let pagination = Pagination::new(0, 5, 100);
     let paginated = pagination.paginate_as::<User, _, UserDTO>(
         db.model::<User>()
-            .select("username, age")
+            .select("username, age, created_at")
             .order("username ASC")
     ).await?;
 
@@ -77,7 +82,7 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
     let pagination_page1 = Pagination::new(1, 5, 100);
     let paginated_page1 = pagination_page1.paginate_as::<User, _, UserDTO>(
         db.model::<User>()
-            .select("username, age")
+            .select("username, age, created_at")
             .order("username ASC")
     ).await?;
     
