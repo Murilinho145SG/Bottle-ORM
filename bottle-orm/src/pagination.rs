@@ -49,6 +49,7 @@ pub struct Pagination {
 
     /// The maximum allowed limit for pagination to prevent large result sets.
     /// If the requested `limit` exceeds `max_limit`, it will be capped (default: 100).
+    #[serde(default = "default_max_limit", skip_deserializing)]
     pub max_limit: usize,
 }
 
@@ -72,6 +73,10 @@ pub struct Paginated<T> {
 
 fn default_limit() -> usize {
     10
+}
+
+fn default_max_limit() -> usize {
+	100
 }
 
 impl Default for Pagination {
