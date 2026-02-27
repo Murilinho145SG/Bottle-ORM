@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.10] - 2026-02-27
+
+### Added
+- **`scan_as<R>`**: New method in `QueryBuilder` to map query results to custom DTOs that implement `FromAnyRow`. This is useful for complex queries and JOINs where the result does not map to a full `Model`.
+- **`paginate_as<T, E, R>`**: New method in `Pagination` to execute paginated queries and map the results to a custom DTO.
+- **Integration Tests**: Added `tests/scan_as_test.rs` to verify the new `scan_as` and `paginate_as` features.
+
+### Changed
+- **Documentation**: Added comprehensive documentation for `scan_as` and `paginate_as` methods.
+- **Version Bump**: Updated all crates to `0.4.10`.
+
 ## [0.4.9] - 2026-02-27
 
 ### Fixed
