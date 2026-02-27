@@ -1598,6 +1598,137 @@ where
 
         rows.iter().map(|row| R::from_any_row(row)).collect()
     }
+    
+    /// Executes the query and maps the result to a custom DTO.
+    ///
+    /// Ideal for JOINs and projections where the return type is not a full Model.
+    /// Unlike `scan`, this method does not require `R` to implement `AnyImpl`,
+    /// making it more flexible for custom result structures.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `R` - The target result type. Must implement `FromAnyRow`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<R>)` - Vector of results mapped to type `R`.
+    /// * `Err(sqlx::Error)` - Database error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// #[derive(FromAnyRow)]
+    /// struct UserRoleDTO {
+    ///     username: String,
+    ///     role_name: String,
+    /// }
+    ///
+    /// let results: Vec<UserRoleDTO> = db.model::<User>()
+    ///     .inner_join("roles", "users.role_id = roles.id")
+    ///     .select("users.username, roles.name as role_name")
+    ///     .scan_as::<UserRoleDTO>()
+    ///     .await?;
+    /// ```
+    pub async fn scan_as<R>(mut self) -> Result<Vec<R>, sqlx::Error>
+    where
+        R: FromAnyRow + Send + Unpin,
+    {
+        // Apply default soft delete filter if not disabled
+        if !self.with_deleted {
+            if let Some(soft_delete_col) = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name) {
+                self = self.is_null(soft_delete_col);
+            }
+        }
+    
+        let mut query = String::from("SELECT ");
+        if self.is_distinct {
+            query.push_str("DISTINCT ");
+        }
+    
+        if self.select_columns.is_empty() {
+            query.push('*');
+        } else {
+            let mut select_cols = Vec::with_capacity(self.select_columns.capacity());
+            for col in &self.select_columns {
+                if !self.joins_clauses.is_empty() && col.contains('.') {
+                    if let Some((table, column)) = col.split_once('.') {
+                        if column == "*" {
+                            // Trata corretamente o "table.*", sem colocar aspas no asterisco
+                            select_cols.push(format!("\"{}\".*", table));
+                        } else {
+                            select_cols.push(format!("\"{}\".\"{}\"", table, column));
+                        }
+                    }
+                } else {
+                    select_cols.push(col.clone());
+                }
+            }
+            query.push_str(&select_cols.join(", "));
+        }
+    
+        // Build FROM clause
+        query.push_str(" FROM \"");
+        query.push_str(&self.table_name.to_snake_case());
+        query.push_str("\" ");
+        
+        if !self.joins_clauses.is_empty() {
+            query.push_str(&self.joins_clauses.join(" "));
+        }
+    
+        query.push_str(" WHERE 1=1");
+    
+        let mut args = sqlx::any::AnyArguments::default();
+        let mut arg_counter = 1;
+    
+        for clause in &self.where_clauses {
+            clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+        }
+    
+        if !self.group_by_clauses.is_empty() {
+            query.push_str(&format!(" GROUP BY {}", self.group_by_clauses.join(", ")));
+        }
+    
+        if !self.having_clauses.is_empty() {
+            query.push_str(" HAVING 1=1");
+            for clause in &self.having_clauses {
+                clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+            }
+        }
+    
+        if !self.order_clauses.is_empty() {
+            query.push_str(&format!(" ORDER BY {}", self.order_clauses.join(", ")));
+        }
+    
+        if let Some(limit) = self.limit {
+            query.push_str(" LIMIT ");
+            match self.driver {
+                Drivers::Postgres => {
+                    query.push_str(&format!("${}", arg_counter));
+                    arg_counter += 1;
+                }
+                _ => query.push('?'),
+            }
+            let _ = args.add(limit as i64);
+        }
+    
+        if let Some(offset) = self.offset {
+            query.push_str(" OFFSET ");
+            match self.driver {
+                Drivers::Postgres => {
+                    query.push_str(&format!("${}", arg_counter));
+                }
+                _ => query.push('?'),
+            }
+            let _ = args.add(offset as i64);
+        }
+    
+        if self.debug_mode {
+            log::debug!("SQL: {}", query);
+        }
+    
+        let rows = sqlx::query_with(&query, args).fetch_all(self.tx.executor()).await?;
+        rows.iter().map(|row| R::from_any_row(row)).collect()
+    }
 
     /// Executes the query and returns only the first result.
     ///
