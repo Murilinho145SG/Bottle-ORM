@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-02-27
+
+### Fixed
+- **Pagination Serialization**: Added `#[serde(skip_deserializing)]` to `max_limit` in the `Pagination` struct. This ensures that `max_limit` is always controlled by the application and cannot be overridden by user input during deserialization, enhancing security and predictability.
+
+### Changed
+- **Version Bump**: Updated all crates to `0.4.9`.
+
 ## [0.4.8] - 2026-02-25
 
 ### Added
