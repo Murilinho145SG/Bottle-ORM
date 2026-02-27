@@ -211,4 +211,71 @@ impl Pagination {
 
         Ok(Paginated { data, total, page: self.page, limit: self.limit, total_pages })
     }
+    
+    /// Executes the query and returns a `Paginated<R>` mapping to a custom DTO.
+    ///
+    /// This method is similar to `paginate`, but it uses `scan_as` to map the results
+    /// to a type `R` that implements `FromAnyRow` but does not necessarily implement `AnyImpl`.
+    /// This is particularly useful for complex queries involving JOINs where the result
+    /// doesn't map directly to a single `Model`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The base Model type for the query.
+    /// * `E` - The connection type.
+    /// * `R` - The target result type (DTO/Projection).
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Paginated<R>)` - The paginated results mapped to type `R`.
+    /// * `Err(sqlx::Error)` - Database error.
+    pub async fn paginate_as<'a, T, E, R>(self, mut query: QueryBuilder<'a, T, E>) -> Result<Paginated<R>, sqlx::Error>
+    where
+        T: Model + Send + Sync + Unpin,
+        E: Connection + Send,
+        R: FromAnyRow + Send + Unpin,
+    {
+        // 1. Prepare COUNT query
+        let original_select = query.select_columns.clone();
+        let original_order = query.order_clauses.clone();
+        let _original_limit = query.limit;
+        let _original_offset = query.offset;
+    
+        query.select_columns = vec!["COUNT(*)".to_string()];
+        query.order_clauses.clear();
+        query.limit = None;
+        query.offset = None;
+    
+        let count_sql = query.to_sql();
+    
+        let mut args = sqlx::any::AnyArguments::default();
+        let mut arg_counter = 1;
+    
+        let mut dummy_query = String::new();
+        for clause in &query.where_clauses {
+            clause(&mut dummy_query, &mut args, &query.driver, &mut arg_counter);
+        }
+        if !query.having_clauses.is_empty() {
+            for clause in &query.having_clauses {
+                clause(&mut dummy_query, &mut args, &query.driver, &mut arg_counter);
+            }
+        }
+    
+        let count_row = sqlx::query_with::<_, _>(&count_sql, args).fetch_one(query.tx.executor()).await?;
+        let total: i64 = count_row.try_get(0)?;
+    
+        // 3. Restore Query State
+        query.select_columns = original_select;
+        query.order_clauses = original_order;
+        query.limit = Some(self.limit);
+        query.offset = Some(self.page * self.limit);
+    
+        // 4. Execute Data Query usando o novo SCAN_AS
+        let data = query.scan_as::<R>().await?;
+    
+        // 5. Calculate Metadata
+        let total_pages = (total as f64 / self.limit as f64).ceil() as i64;
+    
+        Ok(Paginated { data, total, page: self.page, limit: self.limit, total_pages })
+    }
 }
