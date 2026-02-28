@@ -233,10 +233,10 @@ mod types;
 /// macro, including attribute parsing and code generation.
 mod derive_model;
 
+/// Enum derive implementation module.
+mod derive_enum;
+
 /// FromAnyRow derive implementation module.
-///
-/// This module contains the logic for expanding the `#[derive(FromAnyRow)]`
-/// macro, facilitating the mapping of `AnyRow` results to Rust structs.
 mod derive_anyrow;
 
 // ============================================================================
@@ -333,6 +333,29 @@ pub fn model_derive(input: TokenStream) -> TokenStream {
     let expanded = derive_model::expand(ast);
 
     // Convert the generated code back into a TokenStream
+    TokenStream::from(expanded)
+}
+
+/// Derives `Display` and `FromStr` for an enum to facilitate database mapping.
+///
+/// This macro generates implementations that allow the enum to be easily saved
+/// as a string (via `to_string()`) and loaded back from a string (via `parse()`).
+/// It uses the variant names as the string representation.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[derive(BottleEnum, Debug, Clone, PartialEq)]
+/// enum UserStatus {
+///     Active,
+///     Inactive,
+///     Pending,
+/// }
+/// ```
+#[proc_macro_derive(BottleEnum)]
+pub fn enum_derive(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    let expanded = derive_enum::expand(ast);
     TokenStream::from(expanded)
 }
 

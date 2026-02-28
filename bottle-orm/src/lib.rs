@@ -57,6 +57,9 @@
 /// implementation of the `Model` trait for structs representing database tables.
 pub use bottle_orm_macro::Model;
 
+/// Re-export of the procedural macro for deriving `Display` and `FromStr` for enums.
+pub use bottle_orm_macro::BottleEnum;
+
 /// Re-export of the procedural macro for deriving `FromRow` for `AnyRow` and `AnyImpl`.
 ///
 /// This macro facilitates scanning arbitrary query results (via `AnyRow`) into
