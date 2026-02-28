@@ -2192,20 +2192,45 @@ where
 
         let mut select_cols = Vec::with_capacity(self.select_columns.capacity());
         for col in self.select_columns {
-            let is_main_col = self.columns.contains(&col.to_snake_case());
+            let col_snake = col.to_snake_case();
+            let is_main_col = self.columns.contains(&col_snake);
+            
+            // Check if this is a temporal type that needs special handling on Postgres
+            let mut is_temporal = false;
+            if matches!(self.driver, Drivers::Postgres) {
+                if let Some(info) = self.columns_info.iter().find(|c| c.name.to_snake_case() == col_snake) {
+                    if is_temporal_type(info.sql_type) {
+                        is_temporal = true;
+                    }
+                }
+            }
+
             if !self.joins_clauses.is_empty() || self.alias.is_some() {
                 if let Some((table, column)) = col.split_once(".") {
-                    select_cols.push(format!("\"{}\".\"{}\"", table, column));
+                    if is_temporal {
+                        select_cols.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", table, column, column));
+                    } else {
+                        select_cols.push(format!("\"{}\".\"{}\"", table, column));
+                    }
                 } else if col.contains('(') {
                     select_cols.push(col);
                 } else if is_main_col {
-                    select_cols.push(format!("\"{}\".\"{}\"", table_id, col));
+                    if is_temporal {
+                        select_cols.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", table_id, col, col));
+                    } else {
+                        select_cols.push(format!("\"{}\".\"{}\"", table_id, col));
+                    }
                 } else {
                     select_cols.push(format!("\"{}\"", col));
                 }
                 continue;
             }
-            select_cols.push(col);
+            
+            if is_temporal {
+                select_cols.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col, col));
+            } else {
+                select_cols.push(col);
+            }
         }
 
         query.push_str(&select_cols.join(", "));
