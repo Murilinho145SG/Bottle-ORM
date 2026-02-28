@@ -309,7 +309,10 @@ impl<'a> Migrator<'a> {
         let task = Box::new(|db: Database| -> BoxFuture<'static, Result<(), sqlx::Error>> {
             Box::pin(async move {
                 // Synchronize table (create if not exists or add missing columns)
-                db.sync_table::<T>().await?;
+                db.sync_table::<T>().await.map_err(|e| match e {
+                    crate::Error::DatabaseError(se) => se,
+                    _ => sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))),
+                })?;
                 Ok(())
             })
         });
@@ -318,7 +321,10 @@ impl<'a> Migrator<'a> {
         let fk_task = Box::new(|db: Database| -> BoxFuture<'static, Result<(), sqlx::Error>> {
             Box::pin(async move {
                 // Assign foreign key constraints
-                db.assign_foreign_keys::<T>().await?;
+                db.assign_foreign_keys::<T>().await.map_err(|e| match e {
+                    crate::Error::DatabaseError(se) => se,
+                    _ => sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))),
+                })?;
                 Ok(())
             })
         });

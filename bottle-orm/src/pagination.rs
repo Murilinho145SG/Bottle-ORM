@@ -1,102 +1,91 @@
 //! # Pagination Module
 //!
-//! This module provides a standard `Pagination` struct that is compatible with
-//! web frameworks like `axum`, `actix-web`, and `serde`. It allows for easy
-//! extraction of pagination parameters from HTTP requests and application
-//! to `QueryBuilder` instances.
-//!
-//! ## Features
-//!
-//! - **Serde Compatibility**: derives `Serialize` and `Deserialize`
-//! - **Query Integration**: `apply` method to automatically paginate queries
-//! - **Defaults**: sane defaults (page 0, limit 10)
-//!
-//! ## Example with Axum
-//!
-//! ```rust,ignore
-//! use axum::{extract::Query, Json};
-//! use bottle_orm::{Database, pagination::Pagination};
-//!
-//! async fn list_users(
-//!     State(db): State<Database>,
-//!     Query(pagination): Query<Pagination>
-//! ) -> Json<Vec<User>> {
-//!     let users = pagination.apply(db.model::<User>())
-//!         .scan()
-//!         .await
-//!         .unwrap();
-//!
-//!     Json(users)
-//! }
-//! ```
+//! This module provides pagination functionality for Bottle ORM queries.
+//! It handles the calculation of limits, offsets, and total page counts,
+//! and integrates seamlessly with the `QueryBuilder`.
 
-use crate::{AnyImpl, any_struct::FromAnyRow, database::Connection, model::Model, query_builder::QueryBuilder};
+// ============================================================================
+// External Crate Imports
+// ============================================================================
+
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-/// A standard pagination structure.
+// ============================================================================
+// Internal Crate Imports
+// ============================================================================
+
+use crate::{
+    any_struct::FromAnyRow,
+    database::Connection,
+    model::Model,
+    query_builder::QueryBuilder,
+    AnyImpl,
+};
+
+// ============================================================================
+// Pagination Structs
+// ============================================================================
+
+/// Represents a paginated result set from the database.
 ///
-/// Can be deserialized from query parameters (e.g., `?page=1&limit=20`).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct Pagination {
-    /// The page number (0-indexed). Default: 0.
-    #[serde(default)]
-    pub page: usize,
-
-    /// The number of items per page. Default: 10.
-    #[serde(default = "default_limit")]
-    pub limit: usize,
-
-    /// The maximum allowed limit for pagination to prevent large result sets.
-    /// If the requested `limit` exceeds `max_limit`, it will be capped (default: 100).
-    #[serde(default = "default_max_limit", skip_deserializing)]
-    pub max_limit: usize,
-}
-
-/// A wrapper for paginated results.
-///
-/// Contains the data items and metadata about the pagination state (total, pages, etc.).
-/// This struct is `Serialize`d to JSON for API responses.
+/// Contains the requested subset of data along with metadata about the total
+/// number of records and pages available.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Paginated<T> {
-    /// The list of items for the current page.
+    /// The list of items for the current page
     pub data: Vec<T>,
-    /// The total number of items matching the query.
+    /// The total number of records matching the query (ignoring pagination)
     pub total: i64,
-    /// The current page number (0-indexed).
+    /// The current page number (zero-based)
     pub page: usize,
-    /// The number of items per page.
+    /// The number of items per page
     pub limit: usize,
-    /// The total number of pages.
+    /// The total number of pages available
     pub total_pages: i64,
 }
 
-fn default_limit() -> usize {
-    10
-}
-
-fn default_max_limit() -> usize {
-	100
-}
-
-impl Default for Pagination {
-    fn default() -> Self {
-        Self { page: 0, limit: 10, max_limit: 100 }
-    }
+/// A builder for pagination settings.
+///
+/// Use this struct to define how results should be paginated before executing
+/// a query via `paginate()`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Pagination {
+    /// Zero-based page index
+    pub page: usize,
+    /// Number of items per page
+    pub limit: usize,
+    /// Maximum allowed items per page (safety limit)
+    pub max_limit: usize,
 }
 
 impl Pagination {
-    /// Creates a new Pagination instance with a specified max_limit.
+    /// Creates a new Pagination instance with a custom safety limit.
     ///
-    /// If `limit` is greater than `max_limit`, it defaults to 10.
-    pub fn new(page: usize, mut limit: usize, max_limit: usize) -> Self {
-    	if limit > max_limit {
-     		limit = 10;
-     	}
-        Self { page, limit, max_limit }
+    /// # Arguments
+    ///
+    /// * `page` - Zero-based page number
+    /// * `limit` - Items per page
+    /// * `max_limit` - Maximum allowed items per page
+    pub fn new_with_limit(page: usize, limit: usize, max_limit: usize) -> Self {
+        let mut f_limit = limit;
+        if f_limit > max_limit {
+            f_limit = 10;
+        }
+        Self { page, limit: f_limit, max_limit }
     }
 
-    /// Applies the pagination to a `QueryBuilder`.
+    /// Creates a new Pagination instance with a default safety limit of 100.
+    ///
+    /// # Arguments
+    ///
+    /// * `page` - Zero-based page number
+    /// * `limit` - Items per page
+    pub fn new(page: usize, limit: usize) -> Self {
+        Self::new_with_limit(page, limit, 100)
+    }
+
+    /// Applies pagination settings to a `QueryBuilder`.
     ///
     /// This method sets the `limit` and `offset` of the query builder
     /// based on the pagination parameters. It also enforces the `max_limit`
@@ -109,7 +98,7 @@ impl Pagination {
     /// # Returns
     ///
     /// The modified `QueryBuilder`
-    pub fn apply<'a, T, E>(mut self, query: QueryBuilder<'a, T, E>) -> QueryBuilder<'a, T, E>
+    pub fn apply<T, E>(mut self, query: QueryBuilder<T, E>) -> QueryBuilder<T, E>
     where
         T: Model + Send + Sync + Unpin,
         E: Connection + Send,
@@ -118,38 +107,38 @@ impl Pagination {
         if self.limit > self.max_limit {
         	self.limit = 10;
         }
+
         query.limit(self.limit).offset(self.page * self.limit)
     }
 
-    /// Executes the query and returns a `Paginated<T>` result with metadata.
+    /// Executes the query and returns a `Paginated<R>` structure.
     ///
-    /// This method performs two database queries:
-    /// 1. A `COUNT(*)` query to get the total number of records matching the filters.
-    /// 2. The actual `SELECT` query with `LIMIT` and `OFFSET` applied.
+    /// This method performs two database operations:
+    /// 1. A `COUNT(*)` query to determine total records.
+    /// 2. The actual data query with `LIMIT` and `OFFSET` applied.
     ///
     /// # Type Parameters
     ///
-    /// * `T` - The Model type.
-    /// * `E` - The connection type (Database or Transaction).
-    /// * `R` - The result type (usually same as T, but can be a DTO/Projection).
+    /// * `T` - The base Model type for the query.
+    /// * `E` - The connection type.
+    /// * `R` - The target result type (usually the same as T or a DTO).
     ///
     /// # Returns
     ///
-    /// * `Ok(Paginated<R>)` - The paginated results.
+    /// * `Ok(Paginated<R>)` - The data and pagination metadata.
     /// * `Err(sqlx::Error)` - Database error.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let pagination = Pagination::new(0, 10);
-    /// let result = pagination.paginate(db.model::<User>()).await?;
+    /// let p = Pagination::new(0, 20);
+    /// let res: Paginated<User> = p.paginate(db.model::<User>()).await?;
     ///
-    /// println!("Total users: {}", result.total);
-    /// for user in result.data {
+    /// for user in res.data {
     ///     println!("User: {}", user.username);
     /// }
     /// ```
-    pub async fn paginate<'a, T, E, R>(self, mut query: QueryBuilder<'a, T, E>) -> Result<Paginated<R>, sqlx::Error>
+    pub async fn paginate<T, E, R>(self, mut query: QueryBuilder<T, E>) -> Result<Paginated<R>, sqlx::Error>
     where
         T: Model + Send + Sync + Unpin,
         E: Connection + Send,
@@ -191,7 +180,7 @@ impl Pagination {
         }
 
         // Execute count query
-        let count_row = sqlx::query_with::<_, _>(&count_sql, args).fetch_one(query.tx.executor()).await?;
+        let count_row = query.tx.fetch_one(&count_sql, args).await?;
 
         let total: i64 = count_row.try_get(0)?;
 
@@ -229,7 +218,7 @@ impl Pagination {
     ///
     /// * `Ok(Paginated<R>)` - The paginated results mapped to type `R`.
     /// * `Err(sqlx::Error)` - Database error.
-    pub async fn paginate_as<'a, T, E, R>(self, mut query: QueryBuilder<'a, T, E>) -> Result<Paginated<R>, sqlx::Error>
+    pub async fn paginate_as<T, E, R>(self, mut query: QueryBuilder<T, E>) -> Result<Paginated<R>, sqlx::Error>
     where
         T: Model + Send + Sync + Unpin,
         E: Connection + Send,
@@ -261,7 +250,7 @@ impl Pagination {
             }
         }
     
-        let count_row = sqlx::query_with::<_, _>(&count_sql, args).fetch_one(query.tx.executor()).await?;
+        let count_row = query.tx.fetch_one(&count_sql, args).await?;
         let total: i64 = count_row.try_get(0)?;
     
         // 3. Restore Query State

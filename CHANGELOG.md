@@ -5,12 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.18] - 2026-02-28
+## [0.4.19] - 2026-02-28
 
 ### Fixed
-- **Transaction Lifetimes in Async Handlers**: Refactored `Transaction::model()` and `Connection` trait implementations to use more flexible lifetime bounds. This resolves the "implementation is not general enough" error when using Bottle ORM transactions inside Axum handlers and other async contexts.
+- **Axum & Async Handler Compatibility**: Major refactor of the `Connection` trait and `Transaction` struct to resolve "implementation is not general enough" errors. 
+- **Thread-Safe Transactions**: `Transaction` now uses `Arc<Mutex>` internally, making it `Clone`, `Send`, and `Sync`.
+- **API Simplification**: `QueryBuilder` no longer requires a lifetime parameter, and `Transaction::model()` now takes `&self` instead of `&mut self`.
+- **Improved Internal execution**: Query execution logic now uses a simplified, async-friendly trait pattern that avoids complex GAT-related lifetime issues.
 
-## [0.4.17] - 2026-02-28
+## [0.4.18] - 2026-02-28
 
 ### Fixed
 - **Postgres Metadata Decoding**: Added explicit `::TEXT` casts to database metadata queries to fix `PgTypeInfo(Name)` decoding errors when using the `Any` driver.

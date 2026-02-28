@@ -190,7 +190,7 @@ impl Op {
 /// * `limit` - Maximum number of rows to return
 /// * `offset` - Number of rows to skip (for pagination)
 /// * `_marker` - PhantomData to bind the generic type T
-pub struct QueryBuilder<'a, T, E> {
+pub struct QueryBuilder<T, E> {
     /// Reference to the database connection pool
     pub(crate) tx: E,
 
@@ -248,17 +248,17 @@ pub struct QueryBuilder<'a, T, E> {
     pub(crate) with_deleted: bool,
 
     /// PhantomData to bind the generic type T
-    pub(crate) _marker: PhantomData<&'a T>,
+    pub(crate) _marker: PhantomData<T>,
 }
 
 // ============================================================================
 // QueryBuilder Implementation
 // ============================================================================
 
-impl<'a, T, E> QueryBuilder<'a, T, E>
+impl<T, E> QueryBuilder<T, E>
 where
     T: Model + Send + Sync + Unpin,
-    E: Connection + Send,
+    E: Connection,
 {
     // ========================================================================
     // Constructor
@@ -1540,103 +1540,21 @@ where
                 placeholders.join(", ")
             );
 
-            // If debug mode is enabled, log the generated SQL query before execution
             if self.debug_mode {
                 log::debug!("SQL: {}", query_str);
             }
 
-            let mut query = sqlx::query::<sqlx::Any>(&query_str);
+            let mut args = AnyArguments::default();
 
             // Bind values using the optimized value_binding module
-            // This provides type-safe binding with driver-specific optimizations
             for (val_str, sql_type) in bindings {
-                // Create temporary AnyArguments to collect the bound value
-                let mut temp_args = AnyArguments::default();
-
-                // Use the ValueBinder trait for type-safe binding
-                if temp_args.bind_value(&val_str, sql_type, &self.driver).is_ok() {
-                    // For now, we need to convert back to individual bindings
-                    // This is a workaround until we can better integrate AnyArguments
-                    match sql_type {
-                        "INTEGER" | "INT" | "SERIAL" | "serial" | "int4" => {
-                            if let Ok(val) = val_str.parse::<i32>() {
-                                query = query.bind(val);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "BIGINT" | "INT8" | "int8" | "BIGSERIAL" => {
-                            if let Ok(val) = val_str.parse::<i64>() {
-                                query = query.bind(val);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "BOOLEAN" | "BOOL" | "bool" => {
-                            if let Ok(val) = val_str.parse::<bool>() {
-                                query = query.bind(val);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "DOUBLE PRECISION" | "FLOAT" | "float8" | "REAL" | "NUMERIC" | "DECIMAL" => {
-                            if let Ok(val) = val_str.parse::<f64>() {
-                                query = query.bind(val);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "UUID" => {
-                            if let Ok(val) = val_str.parse::<Uuid>() {
-                                query = query.bind(val.hyphenated().to_string());
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "TIMESTAMPTZ" | "DateTime" => {
-                            if let Ok(val) = temporal::parse_datetime_utc(&val_str) {
-                                let formatted = temporal::format_datetime_for_driver(&val, &self.driver);
-                                query = query.bind(formatted);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "TIMESTAMP" | "NaiveDateTime" => {
-                            if let Ok(val) = temporal::parse_naive_datetime(&val_str) {
-                                let formatted = temporal::format_naive_datetime_for_driver(&val, &self.driver);
-                                query = query.bind(formatted);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "DATE" | "NaiveDate" => {
-                            if let Ok(val) = temporal::parse_naive_date(&val_str) {
-                                let formatted = val.format("%Y-%m-%d").to_string();
-                                query = query.bind(formatted);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        "TIME" | "NaiveTime" => {
-                            if let Ok(val) = temporal::parse_naive_time(&val_str) {
-                                let formatted = val.format("%H:%M:%S%.6f").to_string();
-                                query = query.bind(formatted);
-                            } else {
-                                query = query.bind(val_str);
-                            }
-                        }
-                        _ => {
-                            query = query.bind(val_str);
-                        }
-                    }
-                } else {
-                    // Fallback: bind as string if type conversion fails
-                    query = query.bind(val_str);
+                if args.bind_value(&val_str, sql_type, &self.driver).is_err() {
+                    let _ = args.add(val_str);
                 }
             }
 
             // Execute the INSERT query
-            query.execute(self.tx.executor()).await?;
+            self.tx.execute(&query_str, args).await?;
             Ok(())
         })
     }
@@ -1730,7 +1648,7 @@ where
                 log::debug!("SQL Batch: {}", query_str);
             }
 
-            let mut query = sqlx::query::<sqlx::Any>(&query_str);
+            let mut args = AnyArguments::default();
 
             for model in models {
                 let data_map = model.to_map();
@@ -1739,88 +1657,18 @@ where
                     let sql_type = col.sql_type;
 
                     if let Some(val_str) = val_opt {
-                        // Use the same binding logic as single insert
-                        match sql_type {
-                            "INTEGER" | "INT" | "SERIAL" | "serial" | "int4" => {
-                                if let Ok(val) = val_str.parse::<i32>() {
-                                    query = query.bind(val);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "BIGINT" | "INT8" | "int8" | "BIGSERIAL" => {
-                                if let Ok(val) = val_str.parse::<i64>() {
-                                    query = query.bind(val);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "BOOLEAN" | "BOOL" | "bool" => {
-                                if let Ok(val) = val_str.parse::<bool>() {
-                                    query = query.bind(val);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "DOUBLE PRECISION" | "FLOAT" | "float8" | "REAL" | "NUMERIC" | "DECIMAL" => {
-                                if let Ok(val) = val_str.parse::<f64>() {
-                                    query = query.bind(val);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "UUID" => {
-                                if let Ok(val) = val_str.parse::<Uuid>() {
-                                    query = query.bind(val.hyphenated().to_string());
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "TIMESTAMPTZ" | "DateTime" => {
-                                if let Ok(val) = temporal::parse_datetime_utc(val_str) {
-                                    let formatted = temporal::format_datetime_for_driver(&val, &self.driver);
-                                    query = query.bind(formatted);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "TIMESTAMP" | "NaiveDateTime" => {
-                                if let Ok(val) = temporal::parse_naive_datetime(val_str) {
-                                    let formatted = temporal::format_naive_datetime_for_driver(&val, &self.driver);
-                                    query = query.bind(formatted);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "DATE" | "NaiveDate" => {
-                                if let Ok(val) = temporal::parse_naive_date(val_str) {
-                                    let formatted = val.format("%Y-%m-%d").to_string();
-                                    query = query.bind(formatted);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            "TIME" | "NaiveTime" => {
-                                if let Ok(val) = temporal::parse_naive_time(val_str) {
-                                    let formatted = val.format("%H:%M:%S%.6f").to_string();
-                                    query = query.bind(formatted);
-                                } else {
-                                    query = query.bind(val_str.clone());
-                                }
-                            }
-                            _ => {
-                                query = query.bind(val_str.clone());
-                            }
+                        if args.bind_value(val_str, sql_type, &self.driver).is_err() {
+                            let _ = args.add(val_str.clone());
                         }
                     } else {
-                        // Bind NULL for missing values (usually from Option::None)
-                        query = query.bind(None::<String>);
+                        // Bind NULL for missing values
+                        let _ = args.add(None::<String>);
                     }
                 }
             }
 
             // Execute the batch INSERT query
-            query.execute(self.tx.executor()).await?;
+            self.tx.execute(&query_str, args).await?;
             Ok(())
         })
     }
@@ -2183,7 +2031,7 @@ where
         }
 
         // Execute query and fetch all results
-        let rows = sqlx::query_with(&query, args).fetch_all(self.tx.executor()).await?;
+        let rows = self.tx.fetch_all(&query, args).await?;
 
         rows.iter().map(|row| R::from_any_row(row)).collect()
     }
@@ -2468,7 +2316,7 @@ where
             log::debug!("SQL: {}", query);
         }
 
-        let rows = sqlx::query_with(&query, args).fetch_all(self.tx.executor()).await?;
+        let rows = self.tx.fetch_all(&query, args).await?;
         rows.iter().map(|row| R::from_any_row(row)).collect()
     }
 
@@ -2601,7 +2449,7 @@ where
         log::debug!("SQL: {}", query);
 
         // Execute query and fetch exactly one result
-        let row = sqlx::query_with(&query, args).fetch_one(self.tx.executor()).await?;
+        let row = self.tx.fetch_one(&query, args).await?;
         R::from_any_row(&row)
     }
 
@@ -2748,7 +2596,7 @@ where
         }
 
         // Execute query and fetch one row
-        let row = sqlx::query_with::<_, _>(&query, args).fetch_one(self.tx.executor()).await?;
+        let row = self.tx.fetch_one(&query, args).await?;
 
         // Map row to the output type using FromAnyRow
         O::from_any_row(&row).map_err(|e| sqlx::Error::Decode(Box::new(e)))
@@ -2902,7 +2750,7 @@ where
             }
 
             // Execute the UPDATE query
-            let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
+            let result = self.tx.execute(&query, args).await?;
 
             Ok(result.rows_affected())
         })
@@ -2954,7 +2802,7 @@ where
                 log::debug!("SQL: {}", query);
             }
 
-            let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
+            let result = self.tx.execute(&query, args).await?;
             Ok(result.rows_affected())
         } else {
             // Standard Delete (no soft delete column)
@@ -2974,7 +2822,7 @@ where
                 log::debug!("SQL: {}", query);
             }
 
-            let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
+            let result = self.tx.execute(&query, args).await?;
             Ok(result.rows_affected())
         }
     }
@@ -3016,7 +2864,7 @@ where
             log::debug!("SQL: {}", query);
         }
 
-        let result = sqlx::query_with(&query, args).execute(self.tx.executor()).await?;
+        let result = self.tx.execute(&query, args).await?;
         Ok(result.rows_affected())
     }
 }
