@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.14] - 2026-02-28
+
+### Added
+- **Scalar Tuple Support**: Enhanced `scalar()` to support tuples (e.g., `(String, DateTime<Utc>)`), allowing multiple columns to be fetched in a single row result.
+- **Unified FromAnyRow Trait**: Merged positional decoding logic into the main `FromAnyRow` trait with a new `from_any_row_at` method.
+- **Positional Struct Decoding**: Structs derived with `Model` or `FromAnyRow` now automatically support positional decoding, enabling their use inside tuples (e.g., `scan::<(User, Profile)>()`).
+- **Improved Temporal/UUID Decoding**: Enhanced positional decoding for `DateTime` and `Uuid` to handle both direct and `Option` types robustly.
+
+### Fixed
+- **Scalar Type Constraint**: Removed restrictive `sqlx::Type<Any>` constraint from `scalar()`, enabling it to work with any type that implements `FromAnyRow`.
+
 ## [0.4.13] - 2026-02-28
 
 ### Added
