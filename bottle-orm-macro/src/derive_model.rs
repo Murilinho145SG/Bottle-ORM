@@ -82,6 +82,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let mut index = false;
         let mut omit = false;
         let mut soft_delete = false;
+        let mut is_enum = false;
         let mut foreign_table_tokens = quote! { None };
         let mut foreign_key_tokens = quote! { None };
 
@@ -130,6 +131,9 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                     if meta.path.is_ident("soft_delete") {
                         soft_delete = true;
                     }
+                    if meta.path.is_ident("enum") {
+                        is_enum = true;
+                    }
                     Ok(())
                 })
                 .expect("Failed to parse orm attributes");
@@ -140,6 +144,11 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
             && sql_type == "TEXT" {
                 sql_type = format!("VARCHAR({})", s);
             }
+        
+        // If it's an enum, we force the SQL type to TEXT unless otherwise specified
+        if is_enum && (sql_type == "TEXT" || sql_type == "VARCHAR(255)") {
+            sql_type = "TEXT".to_string();
+        }
 
         quote! {
             bottle_orm::ColumnInfo {
@@ -222,23 +231,47 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let alias_name = format!("{}__{}", table_name_str, column_name);
 
         let (sql_type, is_nullable) = rust_type_to_sql(field_type);
+        
+        let mut is_enum = false;
+        for attr in &f.attrs {
+            if attr.path().is_ident("orm") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("enum") {
+                        is_enum = true;
+                    }
+                    Ok(())
+                });
+            }
+        }
 
-        if sql_type == "TIMESTAMPTZ" || sql_type == "TIMESTAMP" || sql_type == "DATE" || sql_type == "TIME" {
+        if is_enum {
+            if is_nullable {
+                if let Some(inner_type) = get_inner_type(field_type) {
+                    quote! {
+                        let #field_name: #field_type = match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name))? {
+                            Some(s) => Some(s.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))?),
+                            None => None,
+                        };
+                    }
+                } else {
+                    quote! { let #field_name: #field_type = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?; }
+                }
+            } else {
+                quote! {
+                    let #field_name: #field_type = {
+                        let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?;
+                        s.parse().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))?
+                    };
+                }
+            }
+        } else if sql_type == "TIMESTAMPTZ" || sql_type == "TIMESTAMP" || sql_type == "DATE" || sql_type == "TIME" {
              // For temporal types, we MUST decode as String and parse
              if is_nullable {
                  if let Some(inner_type) = get_inner_type(field_type) {
                      quote! {
-                        let #field_name: #field_type = {
-                            match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name)) {
-                                Ok(Some(s)) => {
-                                    match s.parse::<#inner_type>() {
-                                        Ok(v) => Some(v),
-                                        Err(e) => return Err(sqlx::Error::Decode(Box::new(e))),
-                                    }
-                                },
-                                Ok(None) => None,
-                                Err(e) => return Err(e)
-                            }
+                        let #field_name: #field_type = match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name))? {
+                            Some(s) => Some(s.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?),
+                            None => None,
                         };
                      }
                  } else {
@@ -247,10 +280,8 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
              } else {
                  quote! {
                     let #field_name: #field_type = {
-                        match row.try_get::<String, _>(#alias_name).or_else(|_| row.try_get::<String, _>(#column_name)) {
-                            Ok(s) => s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                            Err(e) => return Err(e)
-                        }
+                        let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?;
+                        s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
                     };
                  }
              }
@@ -259,17 +290,9 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
              if is_nullable {
                  if let Some(inner_type) = get_inner_type(field_type) {
                      quote! {
-                        let #field_name: #field_type = {
-                            match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name)) {
-                                Ok(Some(s)) => {
-                                    match s.parse::<#inner_type>() {
-                                        Ok(v) => Some(v),
-                                        Err(e) => return Err(sqlx::Error::Decode(Box::new(e))),
-                                    }
-                                },
-                                Ok(None) => None,
-                                Err(e) => return Err(e)
-                            }
+                        let #field_name: #field_type = match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name))? {
+                            Some(s) => Some(s.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?),
+                            None => None,
                         };
                      }
                  } else {
@@ -278,10 +301,8 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
              } else {
                  quote! {
                     let #field_name: #field_type = {
-                        match row.try_get::<String, _>(#alias_name).or_else(|_| row.try_get::<String, _>(#column_name)) {
-                            Ok(s) => s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
-                            Err(e) => return Err(e)
-                        }
+                        let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?;
+                        s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
                     };
                  }
              }
@@ -303,8 +324,54 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let field_name = &f.ident;
         let field_type = &f.ty;
         let (sql_type, is_nullable) = rust_type_to_sql(field_type);
+        
+        let mut is_enum = false;
+        for attr in &f.attrs {
+            if attr.path().is_ident("orm") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("enum") {
+                        is_enum = true;
+                    }
+                    Ok(())
+                });
+            }
+        }
 
-        if sql_type == "TIMESTAMPTZ" || sql_type == "TIMESTAMP" || sql_type == "DATE" || sql_type == "TIME" || sql_type == "UUID" {
+        if is_enum {
+            if is_nullable {
+                if let Some(inner_type) = get_inner_type(field_type) {
+                    quote! {
+                        let #field_name: #field_type = {
+                            let s: Option<String> = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
+                                index: index.to_string(),
+                                source: Box::new(e)
+                            })?;
+                            *index += 1;
+                            match s {
+                                Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))?),
+                                None => None,
+                            }
+                        };
+                    }
+                } else {
+                    quote! {
+                        let #field_name: #field_type = row.try_get(*index)?;
+                        *index += 1;
+                    }
+                }
+            } else {
+                quote! {
+                    let #field_name: #field_type = {
+                        let s: String = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: index.to_string(),
+                            source: Box::new(e)
+                        })?;
+                        *index += 1;
+                        s.parse().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))?
+                    };
+                }
+            }
+        } else if sql_type == "TIMESTAMPTZ" || sql_type == "TIMESTAMP" || sql_type == "DATE" || sql_type == "TIME" || sql_type == "UUID" {
             if is_nullable {
                 if let Some(inner_type) = get_inner_type(field_type) {
                     quote! {

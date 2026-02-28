@@ -55,9 +55,51 @@ pub fn expand(input: DeriveInput) -> TokenStream {
         let field_type = &f.ty;
         let column_name = field_name.as_ref().unwrap().to_string();
         let alias_name = format!("{}__{}", table_name, column_name);
+        
+        let mut is_enum = false;
+        for attr in &f.attrs {
+            if attr.path().is_ident("orm") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("enum") {
+                        is_enum = true;
+                    }
+                    Ok(())
+                });
+            }
+        }
 
-        // Special handling for DateTime fields: parse from string
-        if is_datetime(field_type) {
+        if is_enum {
+            let (_, is_nullable) = rust_type_to_sql(field_type);
+            if is_nullable {
+                if let Some(inner_type) = get_inner_type(field_type) {
+                    quote! {
+                        let #field_name: #field_type = {
+                            match row.try_get::<Option<String>, _>(#alias_name).or_else(|_| row.try_get::<Option<String>, _>(#column_name)) {
+                                Ok(Some(s)) => {
+                                    match s.parse::<#inner_type>() {
+                                        Ok(v) => Some(v),
+                                        Err(e) => return Err(sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e))))),
+                                    }
+                                },
+                                Ok(None) => None,
+                                Err(e) => return Err(e)
+                            }
+                        };
+                    }
+                } else {
+                    quote! { let #field_name: #field_type = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?; }
+                }
+            } else {
+                quote! {
+                    let #field_name: #field_type = {
+                        match row.try_get::<String, _>(#alias_name).or_else(|_| row.try_get(#column_name)) {
+                            Ok(s) => s.parse().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))?,
+                            Err(e) => return Err(e)
+                        }
+                    };
+                }
+            }
+        } else if is_datetime(field_type) {
             quote! {
                 let #field_name: #field_type = {
                      let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name)).map_err(|e| sqlx::Error::ColumnDecode {
@@ -94,8 +136,20 @@ pub fn expand(input: DeriveInput) -> TokenStream {
         let field_name = &f.ident;
         let field_type = &f.ty;
 
-        // Special handling for DateTime fields: parse from string
-        if is_datetime(field_type) || is_uuid(field_type) {
+        let mut is_enum = false;
+        for attr in &f.attrs {
+            if attr.path().is_ident("orm") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("enum") {
+                        is_enum = true;
+                    }
+                    Ok(())
+                });
+            }
+        }
+
+        // Special handling for Enum, DateTime fields: parse from string
+        if is_enum || is_datetime(field_type) || is_uuid(field_type) {
             let (_, is_nullable) = rust_type_to_sql(field_type);
             if is_nullable {
                 if let Some(inner_type) = get_inner_type(field_type) {
@@ -107,7 +161,7 @@ pub fn expand(input: DeriveInput) -> TokenStream {
                             })?;
                             *index += 1;
                             match s {
-                                Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?),
+                                Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))),
                                 None => None,
                             }
                         };
@@ -126,7 +180,7 @@ pub fn expand(input: DeriveInput) -> TokenStream {
                             source: Box::new(e)
                         })?;
                          *index += 1;
-                         s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+                         s.parse().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))?
                     };
                 }
             }
