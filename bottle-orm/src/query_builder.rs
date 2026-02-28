@@ -49,7 +49,7 @@
 
 use futures::future::BoxFuture;
 use heck::ToSnakeCase;
-use sqlx::{Any, Arguments, Decode, Encode, Row, Type, any::AnyArguments};
+use sqlx::{Any, Arguments, Decode, Encode, Type, any::AnyArguments};
 use std::marker::PhantomData;
 use uuid::Uuid;
 
@@ -903,7 +903,7 @@ where
     /// ```
     pub async fn sum<N>(mut self, column: &str) -> Result<N, sqlx::Error>
     where
-        N: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
+        N: FromAnyRow + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
         self.select_columns = vec![format!("SUM({})", column)];
         self.scalar::<N>().await
@@ -924,7 +924,7 @@ where
     /// ```
     pub async fn avg<N>(mut self, column: &str) -> Result<N, sqlx::Error>
     where
-        N: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
+        N: FromAnyRow + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
         self.select_columns = vec![format!("AVG({})", column)];
         self.scalar::<N>().await
@@ -945,7 +945,7 @@ where
     /// ```
     pub async fn min<N>(mut self, column: &str) -> Result<N, sqlx::Error>
     where
-        N: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
+        N: FromAnyRow + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
         self.select_columns = vec![format!("MIN({})", column)];
         self.scalar::<N>().await
@@ -966,7 +966,7 @@ where
     /// ```
     pub async fn max<N>(mut self, column: &str) -> Result<N, sqlx::Error>
     where
-        N: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
+        N: FromAnyRow + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
         self.select_columns = vec![format!("MAX({})", column)];
         self.scalar::<N>().await
@@ -2168,7 +2168,7 @@ where
     /// ```
     pub async fn scalar<O>(mut self) -> Result<O, sqlx::Error>
     where
-        O: for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
+        O: FromAnyRow + Send + Unpin,
     {
         // Apply default soft delete filter if not disabled
         if !self.with_deleted {
@@ -2261,8 +2261,8 @@ where
         // Execute query and fetch one row
         let row = sqlx::query_with::<_, _>(&query, args).fetch_one(self.tx.executor()).await?;
 
-        // Get the first column
-        row.try_get::<O, _>(0)
+        // Map row to the output type using FromAnyRow
+        O::from_any_row(&row).map_err(|e| sqlx::Error::Decode(Box::new(e)))
     }
 
     /// Updates a single column in the database.

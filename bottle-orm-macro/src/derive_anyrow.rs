@@ -7,9 +7,25 @@
 use heck::ToSnakeCase;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Type};
+use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Type};
 
 use crate::types::rust_type_to_sql;
+
+/// Extracts the inner type `T` from `Option<T>`.
+fn get_inner_type(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return Some(inner_ty);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
 
 /// Expands the `FromAnyRow` derive macro.
 ///
@@ -73,6 +89,55 @@ pub fn expand(input: DeriveInput) -> TokenStream {
         }
     });
 
+    // Generate logic for extracting each field from the row by index (positional)
+    let ext_logic_positional = fields.iter().map(|f| {
+        let field_name = &f.ident;
+        let field_type = &f.ty;
+
+        // Special handling for DateTime fields: parse from string
+        if is_datetime(field_type) || is_uuid(field_type) {
+            let (_, is_nullable) = rust_type_to_sql(field_type);
+            if is_nullable {
+                if let Some(inner_type) = get_inner_type(field_type) {
+                    quote! {
+                        let #field_name: #field_type = {
+                            let s: Option<String> = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
+                                index: index.to_string(),
+                                source: Box::new(e)
+                            })?;
+                            *index += 1;
+                            match s {
+                                Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?),
+                                None => None,
+                            }
+                        };
+                    }
+                } else {
+                    quote! {
+                        let #field_name: #field_type = row.try_get(*index)?;
+                        *index += 1;
+                    }
+                }
+            } else {
+                quote! {
+                    let #field_name: #field_type = {
+                         let s: String = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: index.to_string(),
+                            source: Box::new(e)
+                        })?;
+                         *index += 1;
+                         s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+                    };
+                }
+            }
+        } else {
+            quote! {
+                let #field_name: #field_type = row.try_get(*index)?;
+                *index += 1;
+            }
+        }
+    });
+
     // Generate column metadata for AnyImpl
     let col_query = fields.iter().map(|f| {
         let field_name = &f.ident;
@@ -91,6 +156,7 @@ pub fn expand(input: DeriveInput) -> TokenStream {
 
     let field_names = fields.iter().map(|f| &f.ident);
     let field_names_clone = field_names.clone();
+    let field_names_positional = field_names.clone();
     let ext_logic_clone = ext_logic.clone();
 
     // Generate to_map implementation
@@ -134,13 +200,22 @@ pub fn expand(input: DeriveInput) -> TokenStream {
                }
          }
 
-         impl bottle_orm::any_struct::FromAnyRow for #struct_name {
+         impl ::bottle_orm::any_struct::FromAnyRow for #struct_name {
              fn from_any_row(row: &sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
                  use sqlx::Row;
                 #(#ext_logic_clone)*
 
                 Ok(#struct_name {
                      #(#field_names_clone),*
+                 })
+               }
+
+             fn from_any_row_at(row: &sqlx::any::AnyRow, index: &mut usize) -> Result<Self, sqlx::Error> {
+                 use sqlx::Row;
+                #(#ext_logic_positional)*
+
+                Ok(#struct_name {
+                     #(#field_names_positional),*
                  })
                }
          }

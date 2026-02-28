@@ -42,12 +42,13 @@ pub trait AnyImpl {
 }
 
 /// A trait for types that can be mapped from an `AnyRow`.
-///
-/// This trait replaces `sqlx::FromRow` for `bottle-orm` to support
-/// Tuple mapping where each element constructs itself from the whole row
-/// (e.g. `(User, Account)`), rather than consuming columns positionally.
 pub trait FromAnyRow: Sized {
+    /// Constructs the type from the whole row.
     fn from_any_row(row: &AnyRow) -> Result<Self, Error>;
+
+    /// Constructs the type from the row starting at the given index,
+    /// incrementing the index for each column consumed.
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error>;
 }
 
 // ============================================================================
@@ -64,7 +65,13 @@ macro_rules! impl_supported_primitive {
 
             impl FromAnyRow for $t {
                 fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-                    row.try_get(0)
+                    row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))
+                }
+
+                fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+                    let val = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+                    *index += 1;
+                    Ok(val)
                 }
             }
         )*
@@ -85,7 +92,13 @@ macro_rules! impl_cast_primitive {
             impl FromAnyRow for $t {
                 fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
                     // Try to get as i64 and cast
-                    let val: i64 = row.try_get(0)?;
+                    let val: i64 = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
+                    Ok(val as $t)
+                }
+
+                fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+                    let val: i64 = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+                    *index += 1;
                     Ok(val as $t)
                 }
             }
@@ -111,7 +124,13 @@ impl AnyImpl for uuid::Uuid {
 
 impl FromAnyRow for uuid::Uuid {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0)?;
+        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+        *index += 1;
         s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
@@ -127,7 +146,13 @@ impl AnyImpl for chrono::NaiveDateTime {
 
 impl FromAnyRow for chrono::NaiveDateTime {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0)?;
+        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+        *index += 1;
         s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
@@ -143,7 +168,13 @@ impl AnyImpl for chrono::NaiveDate {
 
 impl FromAnyRow for chrono::NaiveDate {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0)?;
+        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+        *index += 1;
         s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
@@ -159,7 +190,13 @@ impl AnyImpl for chrono::NaiveTime {
 
 impl FromAnyRow for chrono::NaiveTime {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0)?;
+        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+        *index += 1;
         s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
@@ -175,7 +212,13 @@ impl AnyImpl for chrono::DateTime<chrono::Utc> {
 
 impl FromAnyRow for chrono::DateTime<chrono::Utc> {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0)?;
+        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
+        s.parse().map_err(|e| Error::Decode(Box::new(e)))
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+        *index += 1;
         s.parse().map_err(|e| Error::Decode(Box::new(e)))
     }
 }
@@ -198,20 +241,19 @@ impl<T: AnyImpl> AnyImpl for Option<T> {
 
 impl<T: FromAnyRow> FromAnyRow for Option<T> {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        // If not null, try to decode T
         match T::from_any_row(row) {
             Ok(v) => Ok(Some(v)),
-            Err(_) => Ok(None), // Fallback? Or propagate error?
-                                // If T fails to decode (e.g. invalid format), we probably should propagate error.
-                                // But if T fails because "column not found" (unlikely for index 0) or type mismatch...
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        match T::from_any_row_at(row, index) {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => Ok(None),
         }
     }
 }
-
-// Special impl for Option<String> to avoid recursion issues if needed,
-// but T=String is in impl_supported_primitive.
-// Actually, generic impl above relies on T::from_any_row returning Error on NULL.
-// We need to intercept NULL before calling T.
 
 // ============================================================================
 // Tuple Implementations
@@ -241,9 +283,18 @@ macro_rules! impl_any_tuple {
 
         impl<$($T: FromAnyRow),+> FromAnyRow for ($($T,)+) {
             fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+                let mut index = 0;
                 Ok((
                     $(
-                        $T::from_any_row(row)?,
+                        $T::from_any_row_at(row, &mut index)?,
+                    )+
+                ))
+            }
+
+            fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+                Ok((
+                    $(
+                        $T::from_any_row_at(row, index)?,
                     )+
                 ))
             }

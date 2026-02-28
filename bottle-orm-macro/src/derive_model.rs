@@ -296,6 +296,55 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     // We need to clone the logic for the second implementation as iterator is consumed
     let from_row_logic_clone = from_row_logic.clone();
     let field_names_construct_clone = field_names_construct.clone();
+    let field_names_construct_positional = field_names_construct.clone();
+
+    // Generate positional logic for extraction by index
+    let from_row_logic_positional = fields.named.iter().map(|f| {
+        let field_name = &f.ident;
+        let field_type = &f.ty;
+        let (sql_type, is_nullable) = rust_type_to_sql(field_type);
+
+        if sql_type == "TIMESTAMPTZ" || sql_type == "TIMESTAMP" || sql_type == "DATE" || sql_type == "TIME" || sql_type == "UUID" {
+            if is_nullable {
+                if let Some(inner_type) = get_inner_type(field_type) {
+                    quote! {
+                        let #field_name: #field_type = {
+                            let s: Option<String> = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
+                                index: index.to_string(),
+                                source: Box::new(e)
+                            })?;
+                            *index += 1;
+                            match s {
+                                Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?),
+                                None => None,
+                            }
+                        };
+                    }
+                } else {
+                    quote! {
+                        let #field_name: #field_type = row.try_get(*index)?;
+                        *index += 1;
+                    }
+                }
+            } else {
+                quote! {
+                    let #field_name: #field_type = {
+                        let s: String = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: index.to_string(),
+                            source: Box::new(e)
+                        })?;
+                        *index += 1;
+                        s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+                    };
+                }
+            }
+        } else {
+            quote! {
+                let #field_name: #field_type = row.try_get(*index)?;
+                *index += 1;
+            }
+        }
+    });
 
     // ========================================================================
     // Generate Fields Module for Autocomplete
@@ -382,6 +431,15 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
 
                  Ok(#struct_name {
                      #(#field_names_construct_clone),*
+                 })
+             }
+
+             fn from_any_row_at(row: &sqlx::any::AnyRow, index: &mut usize) -> Result<Self, sqlx::Error> {
+                 use sqlx::Row;
+                 #(#from_row_logic_positional)*
+
+                 Ok(#struct_name {
+                     #(#field_names_construct_positional),*
                  })
              }
         }
