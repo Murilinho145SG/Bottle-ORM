@@ -1641,6 +1641,190 @@ where
         })
     }
 
+    /// Inserts multiple records into the database in a single batch operation.
+    ///
+    /// This is significantly faster than performing individual inserts in a loop
+    /// as it generates a single SQL statement with multiple VALUES groups.
+    ///
+    /// # Type Binding Strategy
+    ///
+    /// Similar to the single record `insert`, this method uses string parsing for
+    /// type binding. It ensures that all columns defined in the model are included
+    /// in the insert statement, providing NULL for any missing optional values.
+    ///
+    /// # Arguments
+    ///
+    /// * `models` - A slice of model instances to insert
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Successfully inserted all records
+    /// * `Err(sqlx::Error)` - Database error during insertion
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let users = vec![
+    ///     User { username: "alice".to_string(), ... },
+    ///     User { username: "bob".to_string(), ... },
+    /// ];
+    ///
+    /// db.model::<User>().batch_insert(&users).await?;
+    /// ```
+    pub fn batch_insert<'b>(&'b mut self, models: &'b [T]) -> BoxFuture<'b, Result<(), sqlx::Error>> {
+        Box::pin(async move {
+            if models.is_empty() {
+                return Ok(());
+            }
+
+            let table_name = self.table_name.to_snake_case();
+            let columns_info = T::columns();
+
+            // Collect all column names for the INSERT statement
+            // We use all columns defined in the model to ensure consistency across the batch
+            let target_columns: Vec<String> = columns_info
+                .iter()
+                .map(|c| {
+                    let col_name_clean = c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case();
+                    format!("\"{}\"", col_name_clean)
+                })
+                .collect();
+
+            let mut value_groups = Vec::new();
+            let mut bind_index = 1;
+
+            // Generate placeholders for all models
+            for _ in models {
+                let mut placeholders = Vec::new();
+                for col in &columns_info {
+                    match self.driver {
+                        Drivers::Postgres => {
+                            let p = if temporal::is_temporal_type(col.sql_type) {
+                                format!("${}{}", bind_index, temporal::get_postgres_type_cast(col.sql_type))
+                            } else {
+                                match col.sql_type {
+                                    "UUID" => format!("${}::UUID", bind_index),
+                                    "JSONB" | "jsonb" => format!("${}::JSONB", bind_index),
+                                    _ => format!("${}", bind_index),
+                                }
+                            };
+                            placeholders.push(p);
+                            bind_index += 1;
+                        }
+                        _ => {
+                            placeholders.push("?".to_string());
+                        }
+                    }
+                }
+                value_groups.push(format!("({})", placeholders.join(", ")));
+            }
+
+            let query_str = format!(
+                "INSERT INTO \"{}\" ({}) VALUES {}",
+                table_name,
+                target_columns.join(", "),
+                value_groups.join(", ")
+            );
+
+            if self.debug_mode {
+                log::debug!("SQL Batch: {}", query_str);
+            }
+
+            let mut query = sqlx::query::<sqlx::Any>(&query_str);
+
+            for model in models {
+                let data_map = model.to_map();
+                for col in &columns_info {
+                    let val_opt = data_map.get(col.name);
+                    let sql_type = col.sql_type;
+
+                    if let Some(val_str) = val_opt {
+                        // Use the same binding logic as single insert
+                        match sql_type {
+                            "INTEGER" | "INT" | "SERIAL" | "serial" | "int4" => {
+                                if let Ok(val) = val_str.parse::<i32>() {
+                                    query = query.bind(val);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "BIGINT" | "INT8" | "int8" | "BIGSERIAL" => {
+                                if let Ok(val) = val_str.parse::<i64>() {
+                                    query = query.bind(val);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "BOOLEAN" | "BOOL" | "bool" => {
+                                if let Ok(val) = val_str.parse::<bool>() {
+                                    query = query.bind(val);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "DOUBLE PRECISION" | "FLOAT" | "float8" | "REAL" | "NUMERIC" | "DECIMAL" => {
+                                if let Ok(val) = val_str.parse::<f64>() {
+                                    query = query.bind(val);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "UUID" => {
+                                if let Ok(val) = val_str.parse::<Uuid>() {
+                                    query = query.bind(val.hyphenated().to_string());
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "TIMESTAMPTZ" | "DateTime" => {
+                                if let Ok(val) = temporal::parse_datetime_utc(val_str) {
+                                    let formatted = temporal::format_datetime_for_driver(&val, &self.driver);
+                                    query = query.bind(formatted);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "TIMESTAMP" | "NaiveDateTime" => {
+                                if let Ok(val) = temporal::parse_naive_datetime(val_str) {
+                                    let formatted = temporal::format_naive_datetime_for_driver(&val, &self.driver);
+                                    query = query.bind(formatted);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "DATE" | "NaiveDate" => {
+                                if let Ok(val) = temporal::parse_naive_date(val_str) {
+                                    let formatted = val.format("%Y-%m-%d").to_string();
+                                    query = query.bind(formatted);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            "TIME" | "NaiveTime" => {
+                                if let Ok(val) = temporal::parse_naive_time(val_str) {
+                                    let formatted = val.format("%H:%M:%S%.6f").to_string();
+                                    query = query.bind(formatted);
+                                } else {
+                                    query = query.bind(val_str.clone());
+                                }
+                            }
+                            _ => {
+                                query = query.bind(val_str.clone());
+                            }
+                        }
+                    } else {
+                        // Bind NULL for missing values (usually from Option::None)
+                        query = query.bind(None::<String>);
+                    }
+                }
+            }
+
+            // Execute the batch INSERT query
+            query.execute(self.tx.executor()).await?;
+            Ok(())
+        })
+    }
+
     // ========================================================================
     // Query Execution Methods
     // ========================================================================
