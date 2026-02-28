@@ -638,7 +638,7 @@ impl Database {
         let table_name_snake = table_name.to_snake_case();
         let query = match self.driver {
             Drivers::Postgres => {
-                "SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND table_schema = 'public'".to_string()
+                "SELECT column_name::TEXT FROM information_schema.columns WHERE table_name = $1 AND table_schema = 'public'".to_string()
             }
             Drivers::MySQL => {
                 "SELECT column_name FROM information_schema.columns WHERE table_name = ? AND table_schema = DATABASE()".to_string()
@@ -673,7 +673,7 @@ impl Database {
         let table_name_snake = table_name.to_snake_case();
         let query = match self.driver {
             Drivers::Postgres => {
-                "SELECT indexname FROM pg_indexes WHERE tablename = $1 AND schemaname = 'public'".to_string()
+                "SELECT indexname::TEXT FROM pg_indexes WHERE tablename = $1 AND schemaname = 'public'".to_string()
             }
             Drivers::MySQL => {
                 "SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()".to_string()
