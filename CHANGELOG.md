@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.16] - 2026-02-28
+
+### Added
+- **Expanded WHERE Clause Support**: Added comprehensive support for complex filtering including `OR`, `NOT`, `BETWEEN`, `IN`, and nested grouping (`group`, `or_group`).
+- **GORM-like Raw Filters**: Introduced `where_raw()` and `or_where_raw()` for writing custom SQL filter fragments with automatic placeholder conversion.
+- **Automatic Migration Diffing**: The migrator now automatically detects missing columns and indexes in existing tables and applies `ALTER TABLE` commands to synchronize the database schema with Rust models.
+- **Improved SQLite Compatibility**: Enhanced Query Builder to handle SQLite-specific aliasing and prefixing requirements during complex queries.
+
 ## [0.4.15] - 2026-02-28
 
 ### Fixed
