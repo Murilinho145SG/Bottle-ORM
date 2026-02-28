@@ -305,18 +305,16 @@ impl<'a> Migrator<'a> {
     where
         T: Model + 'static + Send + Sync,
     {
-        // Create table creation task
-        // This task clones the database and creates the table asynchronously
+        // Create table creation task with diffing
         let task = Box::new(|db: Database| -> BoxFuture<'static, Result<(), sqlx::Error>> {
             Box::pin(async move {
-                // Create table with columns, indexes, and inline constraints
-                db.create_table::<T>().await?;
+                // Synchronize table (create if not exists or add missing columns)
+                db.sync_table::<T>().await?;
                 Ok(())
             })
         });
 
         // Create foreign key assignment task
-        // This task runs after all tables are created to ensure references exist
         let fk_task = Box::new(|db: Database| -> BoxFuture<'static, Result<(), sqlx::Error>> {
             Box::pin(async move {
                 // Assign foreign key constraints

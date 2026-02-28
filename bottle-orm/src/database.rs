@@ -633,6 +633,154 @@ impl Database {
         Ok(self)
     }
 
+    /// Returns the current columns of a table in the database.
+    pub async fn get_table_columns(&self, table_name: &str) -> Result<Vec<String>, Error> {
+        let table_name_snake = table_name.to_snake_case();
+        let query = match self.driver {
+            Drivers::Postgres => {
+                "SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND table_schema = 'public'".to_string()
+            }
+            Drivers::MySQL => {
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ? AND table_schema = DATABASE()".to_string()
+            }
+            Drivers::SQLite => {
+                // SQLite needs a different approach since PRAGMA is not a standard SELECT
+                format!("PRAGMA table_info(\"{}\")", table_name_snake)
+            }
+        };
+
+        let rows = if let Drivers::SQLite = self.driver {
+            sqlx::query(&query).fetch_all(&self.pool).await?
+        } else {
+            sqlx::query(&query).bind(&table_name_snake).fetch_all(&self.pool).await?
+        };
+
+        let mut columns = Vec::new();
+        for row in rows {
+            let col_name: String = if let Drivers::SQLite = self.driver {
+                row.try_get("name")?
+            } else {
+                row.try_get(0)?
+            };
+            columns.push(col_name);
+        }
+
+        Ok(columns)
+    }
+
+    /// Returns the current indexes of a table in the database.
+    pub async fn get_table_indexes(&self, table_name: &str) -> Result<Vec<String>, Error> {
+        let table_name_snake = table_name.to_snake_case();
+        let query = match self.driver {
+            Drivers::Postgres => {
+                "SELECT indexname FROM pg_indexes WHERE tablename = $1 AND schemaname = 'public'".to_string()
+            }
+            Drivers::MySQL => {
+                "SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()".to_string()
+            }
+            Drivers::SQLite => {
+                format!("PRAGMA index_list(\"{}\")", table_name_snake)
+            }
+        };
+
+        let rows = if let Drivers::SQLite = self.driver {
+            sqlx::query(&query).fetch_all(&self.pool).await?
+        } else {
+            sqlx::query(&query).bind(&table_name_snake).fetch_all(&self.pool).await?
+        };
+
+        let mut indexes = Vec::new();
+        for row in rows {
+            let idx_name: String = if let Drivers::SQLite = self.driver {
+                row.try_get("name")?
+            } else {
+                row.try_get(0)?
+            };
+            indexes.push(idx_name);
+        }
+
+        Ok(indexes)
+    }
+
+    /// Synchronizes the database table with the model definition (Diffing).
+    ///
+    /// This method compares the current table structure in the database with the
+    /// model's `ColumnInfo`. If the table doesn't exist, it creates it. If it
+    /// exists, it adds any missing columns or indexes.
+    pub async fn sync_table<T: Model>(&self) -> Result<&Self, Error> {
+        let table_name = T::table_name().to_snake_case();
+        
+        // Check if table exists
+        let exists: bool = match self.driver {
+            Drivers::Postgres => {
+                let row = sqlx::query("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = $1 AND table_schema = 'public')")
+                    .bind(&table_name)
+                    .fetch_one(&self.pool)
+                    .await?;
+                row.try_get(0)?
+            }
+            Drivers::MySQL => {
+                let row = sqlx::query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = ? AND table_schema = DATABASE())")
+                    .bind(&table_name)
+                    .fetch_one(&self.pool)
+                    .await?;
+                row.try_get(0)?
+            }
+            Drivers::SQLite => {
+                let row = sqlx::query("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?")
+                    .bind(&table_name)
+                    .fetch_one(&self.pool)
+                    .await?;
+                let count: i64 = row.try_get(0)?;
+                count > 0
+            }
+        };
+
+        if !exists {
+            // Table doesn't exist, create it from scratch
+            self.create_table::<T>().await?;
+            return Ok(self);
+        }
+
+        // Table exists, perform diffing
+        let current_columns = self.get_table_columns(&table_name).await?;
+        let current_indexes = self.get_table_indexes(&table_name).await?;
+        let model_columns = T::columns();
+
+        for col in model_columns {
+            let col_name = col.name.strip_prefix("r#").unwrap_or(col.name).to_snake_case();
+            let index_name = format!("idx_{}_{}", table_name, col_name);
+            // 1. Check for missing columns
+            if !current_columns.contains(&col_name) {
+                log::info!("Adding missing column '{}' to table '{}'", col_name, table_name);
+
+                let mut alter_query = format!("ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}", table_name, col_name, col.sql_type);
+                
+                if !col.is_nullable {
+                    if col.create_time {
+                        alter_query.push_str(" NOT NULL DEFAULT CURRENT_TIMESTAMP");
+                    }
+                    // Note: We avoid adding NOT NULL to existing columns without DEFAULT to prevent errors
+                }
+
+                sqlx::query(&alter_query).execute(&self.pool).await?;
+            }
+
+            // 2. Check for missing indexes (even if column existed)
+            if col.index && !current_indexes.contains(&index_name) {
+                log::info!("Creating missing index '{}' on table '{}'", index_name, table_name);
+                let index_type = if col.unique { "UNIQUE INDEX" } else { "INDEX" };
+                let index_query = format!(
+                    "CREATE {} IF NOT EXISTS \"{}\" ON \"{}\" (\"{}\")",
+                    index_type, index_name, table_name, col_name,
+                );
+                sqlx::query(&index_query).execute(&self.pool).await?;
+            }
+        }
+
+        Ok(self)
+    }
+
     /// Starts a new database transaction.
     ///
     /// Returns a `Transaction` wrapper that can be used to execute multiple
