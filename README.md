@@ -4,89 +4,79 @@
 [![Docs.rs](https://docs.rs/bottle-orm/badge.svg)](https://docs.rs/bottle-orm)
 [![License](https://img.shields.io/crates/l/bottle-orm.svg)](https://github.com/Murilinho145SG/bottle-orm/blob/main/LICENSE)
 
-**Bottle ORM** is a lightweight, async ORM for Rust built on top of [sqlx](https://github.com/launchbadge/sqlx). It is designed to be simple, efficient, and easy to use, providing a fluent Query Builder and automatic schema migrations.
+**Bottle ORM** is a lightweight, async ORM for Rust built on top of [sqlx](https://github.com/launchbadge/sqlx). It is designed to be simple, efficient, and easy to use, providing a fluent Query Builder, automatic schema migrations, and high-performance batch operations.
 
-## Features
+## Key Features
 
 - **Async & Non-blocking**: Built on `tokio` and `sqlx`.
-- **Multi-Driver Support**: Compatible with PostgreSQL, MySQL, and SQLite (via `sqlx::Any`).
+- **Multi-Driver Support**: PostgreSQL, MySQL, and SQLite (via `sqlx::Any`).
 - **Macro-based Models**: Define your schema using standard Rust structs with `#[derive(Model)]`.
 - **Fluent Query Builder**: Chainable methods for filtering, selecting, pagination, and sorting.
-- **Auto-Migration**: Automatically creates tables and foreign key constraints based on your structs.
-
-## Project Structure
-
-This repository is a workspace containing:
-
-- **[`bottle-orm`](./bottle-orm)**: The main crate.
-- **[`bottle-orm-macro`](./bottle-orm-macro)**: Procedural macros for the ORM.
+- **Batch Operations**: High-performance `batch_insert` for multiple records.
+- **Native Enum Support**: Easy mapping of Rust Enums to database columns.
+- **Auto-Migration & Diffing**: Automatically creates tables and **synchronizes schema changes** (ALTER TABLE) based on your structs.
+- **UUID Support**: Full support for UUID versions 1 through 7.
 
 ## Installation
 
-Add `bottle-orm` to your `Cargo.toml`. You will also need `sqlx`, `tokio`, `serde`, and optionally `uuid` for UUID support.
+Add `bottle-orm` to your `Cargo.toml`.
 
 ```toml
 [dependencies]
-bottle-orm = "0.1.0"
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-native-tls", "any", "postgres", "sqlite", "mysql", "chrono"] }
+bottle-orm = "0.4.16"
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-native-tls", "any", "postgres", "sqlite", "mysql", "chrono", "uuid"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.11", features = ["v4", "v7", "serde"] }  # Optional: for UUID support
+uuid = { version = "1.11", features = ["serde", "v7"] }
 ```
 
 ## Quick Start
 
 ### 1. Define your Models
 
-Use the `#[derive(Model)]` macro to define your database tables.
+Use `#[derive(Model)]` for tables and `#[derive(BottleEnum)]` for type-safe enums.
 
 ```rust
-use bottle_orm::Model;
+use bottle_orm::{Model, BottleEnum};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 
-#[derive(Model, Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(BottleEnum, Debug, Clone, Serialize, Deserialize, PartialEq)]
+enum UserRole {
+    Admin,
+    User,
+    Guest,
+}
+
+#[derive(Model, Debug, Clone, Serialize, Deserialize)]
 struct User {
     #[orm(primary_key)]
     id: i32,
-    #[orm(size = 50, unique)]
+    #[orm(size = 50, unique, index)]
     username: String,
-    age: i32,
+    #[orm(enum)]
+    role: UserRole,
+    age: Option<i32>,
     #[orm(create_time)]
     created_at: DateTime<Utc>,
 }
-
-#[derive(Model, Debug, Clone, Serialize, Deserialize, FromRow)]
-struct Post {
-    #[orm(primary_key)]
-    id: i32,
-    #[orm(foreign_key = "User::id")]
-    user_id: i32,
-    title: String,
-    content: String,
-}
 ```
 
-### 2. Connect and Migrate
+### 2. Connect and Migrate (with Auto-Diff)
 
-Initialize the database connection and run migrations to create tables automatically.
+Bottle ORM not only creates tables but also detects missing columns or indexes and adds them automatically.
 
 ```rust
 use bottle_orm::Database;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let database_url = "sqlite::memory:"; // Or your DB URL
+    let db = Database::connect("sqlite::memory:").await?;
 
-    // 1. Connect to the database
-    let db = Database::connect(&database_url).await?;
-
-    // 2. Run Migrations
+    // Register models and run migrations
     db.migrator()
         .register::<User>()
-        .register::<Post>()
         .run()
         .await?;
     
@@ -94,15 +84,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### 3. Query Data
+### 3. High-Performance Batch Insert
 
-Use the fluent query builder to filter, sort and retrieve data.
+Insert hundreds of records in a single SQL statement.
 
 ```rust
-// Fetch multiple records with conditions, order, and pagination
-let adults: Vec<User> = db.model::<User>()
-    .filter("age", ">=", 18)
-    .order("age DESC")
+let users = vec![
+    User { username: "alice".to_string(), role: UserRole::Admin, ... },
+    User { username: "bob".to_string(), role: UserRole::User, ... },
+];
+
+db.model::<User>().batch_insert(&users).await?;
+```
+
+### 4. Advanced Query Builder
+
+Filter data using complex logic, nested groups, and raw SQL fragments.
+
+```rust
+use bottle_orm::Op;
+
+let users: Vec<User> = db.model::<User>()
+    .filter("age", Op::Gte, 18)
+    .and_group(|q| {
+        q.filter("role", Op::Eq, "admin")
+         .or_filter("role", Op::Eq, "user")
+    })
+    .where_raw("LENGTH(username) > ?", vec![5])
+    .order("created_at DESC")
     .limit(10)
     .scan()
     .await?;
@@ -113,176 +122,53 @@ let adults: Vec<User> = db.model::<User>()
 - `primary_key`: Marks the column as the Primary Key.
 - `unique`: Adds a UNIQUE constraint.
 - `index`: Creates an index for this column.
-- `create_time`: Sets default value to current timestamp on creation.
-- `update_time`: Auto-updates timestamp on modification (future feature).
+- `enum`: Marks the field as a native Enum (handled via `Display`/`FromStr`).
+- `create_time`: Sets default value to `CURRENT_TIMESTAMP`.
+- `update_time`: Auto-updates timestamp on modification.
 - `foreign_key = "Table::Column"`: Creates a Foreign Key relationship.
 - `size = N`: Sets the column size (e.g., `VARCHAR(N)`).
-- `omit`: Excludes the column from SELECT * queries by default.
-- `soft_delete`: Marks the column for soft delete functionality.
+- `omit`: Excludes the column from `SELECT *` by default (useful for passwords).
+- `soft_delete`: Enables soft delete functionality.
 
 ## Soft Delete
 
-Bottle ORM supports soft delete out of the box. Mark a timestamp column with `#[orm(soft_delete)]` to enable automatic filtering of deleted records.
+Mark a column with `#[orm(soft_delete)]` to enable automatic filtering.
 
 ```rust
-use bottle_orm::{Database, Model, Op};
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
-
-#[derive(Model, Debug, Clone)]
-struct User {
+#[derive(Model)]
+struct Product {
     #[orm(primary_key)]
-    id: Uuid,
-    username: String,
+    id: i32,
+    name: String,
     #[orm(soft_delete)]
     deleted_at: Option<DateTime<Utc>>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = Database::connect("sqlite::memory:").await?;
-    db.migrator().register::<User>().run().await?;
+// Automatically excludes deleted records
+let active = db.model::<Product>().scan().await?;
 
-    let user = User {
-        id: Uuid::new_v4(),
-        username: "john".to_string(),
-        deleted_at: None,
-    };
-    db.model::<User>().insert(&user).await?;
-
-    // Soft delete (sets deleted_at timestamp)
-    db.model::<User>().filter("id", Op::Eq, user.id.to_string()).delete().await?;
-
-    // Standard queries exclude deleted records
-    let active: Vec<User> = db.model::<User>().scan().await?;
-    assert_eq!(active.len(), 0);
-
-    // Include deleted records
-    let all: Vec<User> = db.model::<User>().with_deleted().scan().await?;
-    assert_eq!(all.len(), 1);
-
-    // Permanently delete
-    db.model::<User>()
-        .filter("id", Op::Eq, user.id.to_string())
-        .with_deleted()
-        .hard_delete()
-        .await?;
-
-    Ok(())
-}
+// Include them if needed
+let all = db.model::<Product>().with_deleted().scan().await?;
 ```
 
-## Typed Operators
+## Joins and DTOs
 
-Use the `Op` enum for type-safe filter operations with IDE autocomplete support.
-
-```rust
-use bottle_orm::Op;
-
-// With autocomplete support
-let users: Vec<User> = db.model::<User>()
-    .filter(user_fields::AGE, Op::Gte, 18)
-    .filter(user_fields::NAME, Op::Like, "%John%")
-    .scan()
-    .await?;
-```
-
-### Available Operators
-
-| Operator | SQL |
-|----------|-----|
-| `Op::Eq` | `=` |
-| `Op::Ne` | `!=` |
-| `Op::Gt` | `>` |
-| `Op::Gte` | `>=` |
-| `Op::Lt` | `<` |
-| `Op::Lte` | `<=` |
-| `Op::Like` | `LIKE` |
-| `Op::NotLike` | `NOT LIKE` |
-| `Op::In` | `IN` |
-| `Op::NotIn` | `NOT IN` |
-
-## UUID Support (Versions 1-7)
-
-Bottle ORM has full support for UUID types across all versions (1 through 7). UUIDs are ideal for distributed systems and provide better security than sequential IDs.
-
-### UUID Version Overview
-
-- **Version 1**: Time-based with MAC address
-- **Version 3**: Name-based using MD5 hash
-- **Version 4**: Random (most common)
-- **Version 5**: Name-based using SHA-1 hash
-- **Version 6**: Reordered time-based (better for database indexing)
-- **Version 7**: Unix timestamp-based (sortable, recommended for new projects)
-
-### Example with Different UUID Versions
+Map complex results to custom structs (DTOs).
 
 ```rust
-use bottle_orm::Model;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use uuid::Uuid;
-
-#[derive(Model, Debug, Clone, Serialize, Deserialize, FromRow)]
-struct User {
-    #[orm(primary_key)]
-    id: Uuid,  // Can use any UUID version
-    #[orm(size = 50, unique)]
+#[derive(FromAnyRow)]
+struct UserStats {
     username: String,
-    #[orm(create_time)]
-    created_at: DateTime<Utc>,
+    post_count: i64,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = Database::connect("postgres://localhost/mydb").await?;
-    
-    db.migrator()
-        .register::<User>()
-        .run()
-        .await?;
-
-    // UUID v4 - Random (most common)
-    let user_v4 = User {
-        id: Uuid::new_v4(),
-        username: "user_v4".to_string(),
-        created_at: Utc::now(),
-    };
-    db.model::<User>().insert(&user_v4).await?;
-
-    // UUID v7 - Timestamp-based (recommended for new projects)
-    let user_v7 = User {
-        id: Uuid::now_v7(),
-        username: "user_v7".to_string(),
-        created_at: Utc::now(),
-    };
-    db.model::<User>().insert(&user_v7).await?;
-
-    // Query by UUID
-    let found_user: User = db.model::<User>()
-        .filter("id", "=", user_v4.id)
-        .first()
-        .await?;
-
-    println!("Found user: {:?}", found_user);
-
-    Ok(())
-}
-```
-
-### UUID Foreign Keys
-
-```rust
-#[derive(Model, Debug, Clone, Serialize, Deserialize, FromRow)]
-struct Post {
-    #[orm(primary_key)]
-    id: Uuid,
-    #[orm(foreign_key = "User::id")]
-    user_id: Uuid,  // Foreign key using UUID
-    title: String,
-    content: String,
-}
+let stats: Vec<UserStats> = db.model::<User>()
+    .alias("u")
+    .left_join("Post p ON p.user_id = u.id")
+    .select("u.username, COUNT(p.id) as post_count")
+    .group_by("u.username")
+    .scan_as()
+    .await?;
 ```
 
 ## License
