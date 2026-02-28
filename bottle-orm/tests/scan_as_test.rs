@@ -125,7 +125,7 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
     assert_eq!(dtos[0].username, "user11"); // 20 + 11 = 31
 
     // 5. Test paginate_as with empty select (should use DTO fields)
-    let pagination = Pagination::new(0, 5, 100);
+    let pagination = Pagination::new_with_limit(0, 5, 100);
     let paginated = pagination.paginate_as::<User, _, UserDTO>(
         db.model::<User>()
             .order("username ASC")
@@ -141,7 +141,7 @@ async fn test_scan_as_and_paginate_as() -> Result<(), Box<dyn std::error::Error>
     assert_eq!(paginated.data[0].username, "user1");
     
     // Test second page
-    let pagination_page1 = Pagination::new(1, 5, 100);
+    let pagination_page1 = Pagination::new_with_limit(1, 5, 100);
     let paginated_page1 = pagination_page1.paginate_as::<User, _, UserDTO>(
         db.model::<User>()
             .select("username, age, created_at")

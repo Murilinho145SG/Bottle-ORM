@@ -17,7 +17,7 @@
 //!
 //! ```rust,ignore
 //! use bottle_orm::{Database, Model};
-//! use uuid::Uuid;
+//! 
 //!
 //! // Simple query
 //! let users: Vec<User> = db.model::<User>()
@@ -51,7 +51,7 @@ use futures::future::BoxFuture;
 use heck::ToSnakeCase;
 use sqlx::{Any, Arguments, Decode, Encode, Type, any::AnyArguments};
 use std::marker::PhantomData;
-use uuid::Uuid;
+
 
 // ============================================================================
 // Internal Crate Imports
@@ -1466,7 +1466,7 @@ where
     /// # Example
     ///
     /// ```rust,ignore
-    /// use uuid::Uuid;
+    /// 
     /// use chrono::Utc;
     ///
     /// let new_user = User {
@@ -2768,7 +2768,7 @@ where
     ///
     /// * `Ok(u64)` - The number of rows deleted (or soft-deleted)
     /// * `Err(sqlx::Error)` - Database error
-    pub async fn delete(mut self) -> Result<u64, sqlx::Error> {
+    pub async fn delete(self) -> Result<u64, sqlx::Error> {
         // Check for soft delete column
         let soft_delete_col = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name);
 
@@ -2847,7 +2847,7 @@ where
     ///     .hard_delete()
     ///     .await?;
     /// ```
-    pub async fn hard_delete(mut self) -> Result<u64, sqlx::Error> {
+    pub async fn hard_delete(self) -> Result<u64, sqlx::Error> {
         let mut query = String::from("DELETE FROM \"");
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" WHERE 1=1");

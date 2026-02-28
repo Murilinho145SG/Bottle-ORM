@@ -5,15 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.19] - 2026-02-28
+## [0.4.20] - 2026-02-28
 
 ### Fixed
-- **Axum & Async Handler Compatibility**: Major refactor of the `Connection` trait and `Transaction` struct to resolve "implementation is not general enough" errors. 
-- **Thread-Safe Transactions**: `Transaction` now uses `Arc<Mutex>` internally, making it `Clone`, `Send`, and `Sync`.
-- **API Simplification**: `QueryBuilder` no longer requires a lifetime parameter, and `Transaction::model()` now takes `&self` instead of `&mut self`.
-- **Improved Internal execution**: Query execution logic now uses a simplified, async-friendly trait pattern that avoids complex GAT-related lifetime issues.
+- **Any Driver Registration**: Added automatic call to `sqlx::any::install_default_drivers()` in `Database::connect()` to prevent panics when using the `Any` driver with newer SQLx versions.
+- **Test Stability**: Fixed broken integration tests due to previous API changes in `Pagination`.
+- **Code Quality**: Cleaned up unused imports and unnecessary mutable parameters across the codebase.
 
-## [0.4.18] - 2026-02-28
+## [0.4.19] - 2026-02-28
 
 ### Fixed
 - **Postgres Metadata Decoding**: Added explicit `::TEXT` casts to database metadata queries to fix `PgTypeInfo(Name)` decoding errors when using the `Any` driver.

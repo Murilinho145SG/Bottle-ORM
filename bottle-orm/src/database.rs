@@ -10,7 +10,7 @@
 
 use futures::future::BoxFuture;
 use heck::ToSnakeCase;
-use sqlx::{any::AnyArguments, Any, AnyPool, Row, Arguments};
+use sqlx::{any::AnyArguments, AnyPool, Row, Arguments};
 use std::sync::Arc;
 
 // ============================================================================
@@ -64,16 +64,26 @@ impl Database {
     }
 
     /// Connects to a database using the provided connection string.
+    ///
+    /// This is a convenience method that uses default builder settings.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - A database connection URL (e.g., "postgres://user:pass@localhost/db")
     pub async fn connect(url: &str) -> Result<Self, Error> {
         DatabaseBuilder::new().connect(url).await
     }
 
     /// Returns a new Migrator instance for managing schema changes.
-    pub fn migrator(&self) -> Migrator {
+    pub fn migrator(&self) -> Migrator<'_> {
         Migrator::new(self)
     }
 
     /// Starts building a query for the specified model.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The Model type to query.
     pub fn model<T: Model + Send + Sync + Unpin>(&self) -> QueryBuilder<T, Self> {
         let active_columns = T::active_columns();
         let mut columns: Vec<String> = Vec::with_capacity(active_columns.capacity());
@@ -308,6 +318,9 @@ impl DatabaseBuilder {
     pub fn new() -> Self { Self { max_connections: 5 } }
     pub fn max_connections(mut self, max: u32) -> Self { self.max_connections = max; self }
     pub async fn connect(self, url: &str) -> Result<Database, Error> {
+        // Ensure sqlx drivers are registered for Any driver support
+        let _ = sqlx::any::install_default_drivers();
+
         let pool = sqlx::any::AnyPoolOptions::new().max_connections(self.max_connections).connect(url).await?;
         let driver = if url.starts_with("postgres") { Drivers::Postgres }
                     else if url.starts_with("mysql") { Drivers::MySQL }
