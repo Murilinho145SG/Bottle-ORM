@@ -136,6 +136,10 @@ pub enum Op {
     In,
     /// SQL NOT IN
     NotIn,
+    /// SQL BETWEEN
+    Between,
+    /// SQL NOT BETWEEN
+    NotBetween,
 }
 
 impl Op {
@@ -152,6 +156,8 @@ impl Op {
             Op::NotLike => "NOT LIKE",
             Op::In => "IN",
             Op::NotIn => "NOT IN",
+            Op::Between => "BETWEEN",
+            Op::NotBetween => "NOT BETWEEN",
         }
     }
 }
@@ -324,52 +330,8 @@ where
     // Query Building Methods
     // ========================================================================
 
-    /// Adds a WHERE clause to the query.
-    ///
-    /// This method adds a filter condition to the query. Multiple filters can be chained
-    /// and will be combined with AND operators. The value is bound as a parameter to
-    /// prevent SQL injection.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `V` - The type of the value to filter by. Must be encodable for SQL queries.
-    ///
-    /// # Arguments
-    ///
-    /// * `col` - The column name to filter on
-    /// * `op` - The comparison operator (e.g., "=", ">", "LIKE", "IN")
-    /// * `value` - The value to compare against
-    ///
-    /// # Supported Types
-    ///
-    /// - Primitives: `i32`, `i64`, `f64`, `bool`, `String`
-    /// - UUID: `Uuid` (all versions 1-7)
-    /// - Date/Time: `DateTime<Utc>`, `NaiveDateTime`, `NaiveDate`, `NaiveTime`
-    /// - Options: `Option<T>` for any supported type T
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Filter by integer
-    /// query.filter("age", ">=", 18)
-    ///
-    /// // Filter by string
-    /// query.filter("username", "=", "john_doe")
-    ///
-    /// // Filter by UUID
-    /// let user_id = Uuid::new_v4();
-    /// query.filter("id", "=", user_id)
-    ///
-    /// // Filter with LIKE operator
-    /// query.filter("email", "LIKE", "%@example.com")
-    ///
-    /// // Chain multiple filters
-    /// query
-    ///     .filter("age", Op::Gte, 18)
-    ///     .filter("active", Op::Eq, true)
-    ///     .filter("role", Op::Eq, "admin")
-    /// ```
-    pub fn filter<V>(mut self, col: &'static str, op: Op, value: V) -> Self
+    /// Internal helper to add a WHERE clause with a specific join operator.
+    fn filter_internal<V>(mut self, joiner: &str, col: &'static str, op: Op, value: V) -> Self
     where
         V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
     {
@@ -377,8 +339,9 @@ where
         let table_id = self.get_table_identifier();
         // Check if the column exists in the main table to avoid ambiguous references in JOINS
         let is_main_col = self.columns.contains(&col.to_snake_case());
+        let joiner_owned = joiner.to_string();
         let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
-            query.push_str(" AND ");
+            query.push_str(&joiner_owned);
             if let Some((table, column)) = col.split_once(".") {
                 // If explicit table prefix is provided, use it
                 query.push_str(&format!("\"{}\".\"{}\"", table, column));
@@ -410,6 +373,322 @@ where
 
         self.where_clauses.push(clause);
         self
+    }
+
+    /// Adds a WHERE clause to the query.
+    ///
+    /// This method adds a filter condition to the query. Multiple filters can be chained
+    /// and will be combined with AND operators. The value is bound as a parameter to
+    /// prevent SQL injection.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `V` - The type of the value to filter by. Must be encodable for SQL queries.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to filter on
+    /// * `op` - The comparison operator (e.g., "=", ">", "LIKE", "IN")
+    /// * `value` - The value to compare against
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// query.filter("age", Op::Gte, 18)
+    /// ```
+    pub fn filter<V>(self, col: &'static str, op: Op, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.filter_internal(" AND ", col, op, value)
+    }
+
+    /// Adds an OR WHERE clause to the query.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// query.filter("age", Op::Lt, 18).or_filter("active", Op::Eq, false)
+    /// ```
+    pub fn or_filter<V>(self, col: &'static str, op: Op, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.filter_internal(" OR ", col, op, value)
+    }
+
+    /// Adds an AND NOT WHERE clause to the query.
+    pub fn not_filter<V>(self, col: &'static str, op: Op, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.filter_internal(" AND NOT ", col, op, value)
+    }
+
+    /// Adds an OR NOT WHERE clause to the query.
+    pub fn or_not_filter<V>(self, col: &'static str, op: Op, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.filter_internal(" OR NOT ", col, op, value)
+    }
+
+    /// Adds a BETWEEN clause to the query.
+    pub fn between<V>(mut self, col: &'static str, start: V, end: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        let table_id = self.get_table_identifier();
+        let is_main_col = self.columns.contains(&col.to_snake_case());
+        let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
+            query.push_str(" AND ");
+            if is_main_col {
+                query.push_str(&format!("\"{}\".\"{}\"", table_id, col));
+            } else {
+                query.push_str(&format!("\"{}\"", col));
+            }
+            query.push_str(" BETWEEN ");
+
+            match driver {
+                Drivers::Postgres => {
+                    query.push_str(&format!("${} AND ${}", arg_counter, *arg_counter + 1));
+                    *arg_counter += 2;
+                }
+                _ => query.push_str("? AND ?"),
+            }
+
+            let _ = args.add(start.clone());
+            let _ = args.add(end.clone());
+        });
+        self.where_clauses.push(clause);
+        self
+    }
+
+    /// Adds an OR BETWEEN clause to the query.
+    pub fn or_between<V>(mut self, col: &'static str, start: V, end: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        let table_id = self.get_table_identifier();
+        let is_main_col = self.columns.contains(&col.to_snake_case());
+        let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
+            query.push_str(" OR ");
+            if is_main_col {
+                query.push_str(&format!("\"{}\".\"{}\"", table_id, col));
+            } else {
+                query.push_str(&format!("\"{}\"", col));
+            }
+            query.push_str(" BETWEEN ");
+
+            match driver {
+                Drivers::Postgres => {
+                    query.push_str(&format!("${} AND ${}", arg_counter, *arg_counter + 1));
+                    *arg_counter += 2;
+                }
+                _ => query.push_str("? AND ?"),
+            }
+
+            let _ = args.add(start.clone());
+            let _ = args.add(end.clone());
+        });
+        self.where_clauses.push(clause);
+        self
+    }
+
+    /// Adds an IN list clause to the query.
+    pub fn in_list<V>(mut self, col: &'static str, values: Vec<V>) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        if values.is_empty() {
+            // WHERE 1=0 to ensure empty result
+            let clause: FilterFn = Box::new(|query, _, _, _| {
+                query.push_str(" AND 1=0");
+            });
+            self.where_clauses.push(clause);
+            return self;
+        }
+
+        let table_id = self.get_table_identifier();
+        let is_main_col = self.columns.contains(&col.to_snake_case());
+        let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
+            query.push_str(" AND ");
+            if is_main_col {
+                query.push_str(&format!("\"{}\".\"{}\"", table_id, col));
+            } else {
+                query.push_str(&format!("\"{}\"", col));
+            }
+            query.push_str(" IN (");
+
+            let mut placeholders = Vec::new();
+            for _ in &values {
+                match driver {
+                    Drivers::Postgres => {
+                        placeholders.push(format!("${}", arg_counter));
+                        *arg_counter += 1;
+                    }
+                    _ => placeholders.push("?".to_string()),
+                }
+            }
+            query.push_str(&placeholders.join(", "));
+            query.push(')');
+
+            for val in &values {
+                let _ = args.add(val.clone());
+            }
+        });
+        self.where_clauses.push(clause);
+        self
+    }
+
+    /// Adds an OR IN list clause to the query.
+    pub fn or_in_list<V>(mut self, col: &'static str, values: Vec<V>) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        if values.is_empty() {
+            return self;
+        }
+
+        let table_id = self.get_table_identifier();
+        let is_main_col = self.columns.contains(&col.to_snake_case());
+        let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
+            query.push_str(" OR ");
+            if is_main_col {
+                query.push_str(&format!("\"{}\".\"{}\"", table_id, col));
+            } else {
+                query.push_str(&format!("\"{}\"", col));
+            }
+            query.push_str(" IN (");
+
+            let mut placeholders = Vec::new();
+            for _ in &values {
+                match driver {
+                    Drivers::Postgres => {
+                        placeholders.push(format!("${}", arg_counter));
+                        *arg_counter += 1;
+                    }
+                    _ => placeholders.push("?".to_string()),
+                }
+            }
+            query.push_str(&placeholders.join(", "));
+            query.push(')');
+
+            for val in &values {
+                let _ = args.add(val.clone());
+            }
+        });
+        self.where_clauses.push(clause);
+        self
+    }
+
+    /// Groups filters inside parentheses with an AND operator.
+    pub fn group<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(Self) -> Self,
+    {
+        let old_clauses = std::mem::take(&mut self.where_clauses);
+        self = f(self);
+        let group_clauses = std::mem::take(&mut self.where_clauses);
+        self.where_clauses = old_clauses;
+
+        if !group_clauses.is_empty() {
+            let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
+                query.push_str(" AND (1=1");
+                for c in &group_clauses {
+                    c(query, args, driver, arg_counter);
+                }
+                query.push_str(")");
+            });
+            self.where_clauses.push(clause);
+        }
+        self
+    }
+
+    /// Groups filters inside parentheses with an OR operator.
+    pub fn or_group<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(Self) -> Self,
+    {
+        let old_clauses = std::mem::take(&mut self.where_clauses);
+        self = f(self);
+        let group_clauses = std::mem::take(&mut self.where_clauses);
+        self.where_clauses = old_clauses;
+
+        if !group_clauses.is_empty() {
+            let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
+                query.push_str(" OR (1=1");
+                for c in &group_clauses {
+                    c(query, args, driver, arg_counter);
+                }
+                query.push_str(")");
+            });
+            self.where_clauses.push(clause);
+        }
+        self
+    }
+
+    /// Adds a raw WHERE clause with a placeholder and a single value.
+    ///
+    /// This allows writing raw SQL conditions with a `?` placeholder.
+    /// To use multiple placeholders with different types, chain multiple `where_raw` calls.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - Raw SQL string with one `?` placeholder (e.g., "age > ?")
+    /// * `value` - Value to bind
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.model::<User>()
+    ///     .where_raw("name = ?", "Alice".to_string())
+    ///     .where_raw("age >= ?", 18)
+    ///     .scan()
+    ///     .await?;
+    /// ```
+    pub fn where_raw<V>(mut self, sql: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.where_clauses.push(self.create_raw_clause(" AND ", sql, value));
+        self
+    }
+
+    /// Adds a raw OR WHERE clause with a placeholder.
+    pub fn or_where_raw<V>(mut self, sql: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.where_clauses.push(self.create_raw_clause(" OR ", sql, value));
+        self
+    }
+
+    /// Internal helper to create a raw SQL clause with a single value.
+    fn create_raw_clause<V>(&self, joiner: &'static str, sql: &str, value: V) -> FilterFn
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        let sql_owned = sql.to_string();
+        Box::new(move |query, args, driver, arg_counter| {
+            query.push_str(joiner);
+            
+            let mut processed_sql = sql_owned.clone();
+            if let Some(pos) = processed_sql.find('?') {
+                let placeholder = match driver {
+                    Drivers::Postgres => {
+                        let p = format!("${}", arg_counter);
+                        *arg_counter += 1;
+                        p
+                    }
+                    _ => "?".to_string(),
+                };
+                processed_sql.replace_range(pos..pos + 1, &placeholder);
+            }
+            
+            query.push_str(&processed_sql);
+            let _ = args.add(value.clone());
+        })
     }
 
     /// Adds an equality filter to the query.
@@ -839,19 +1118,20 @@ where
     /// let popular_ages = db.model::<User>()
     ///     .select("age, COUNT(*)")
     ///     .group_by("age")
-    ///     .having("COUNT(*)", ">", 5)
+    ///     .having("COUNT(*)", Op::Gt, 5)
     ///     .scan()
     ///     .await?;
     /// ```
-    pub fn having<V>(mut self, col: &'static str, op: &'static str, value: V) -> Self
+    pub fn having<V>(mut self, col: &'static str, op: Op, value: V) -> Self
     where
         V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
     {
+        let op_str = op.as_sql();
         let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
             query.push_str(" AND ");
             query.push_str(col);
             query.push(' ');
-            query.push_str(op);
+            query.push_str(op_str);
             query.push(' ');
 
             match driver {
