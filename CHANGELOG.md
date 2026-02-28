@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.13] - 2026-02-28
+
+### Added
+- **Full Alias Support**: Added comprehensive support for table aliases via `.alias("u")`.
+- **Join Alias Tracking**: Added `join_aliases` to `QueryBuilder` to track and respect aliases used in JOINS.
+- **Smart Prefixing**: Filters (`filter`, `is_null`, etc.) now automatically apply the correct table/alias prefix only if the column belongs to the main model, preventing ambiguity in multi-table queries.
+- **Alias Integration Tests**: Added `tests/alias_test.rs` to verify alias functionality in filters, joins, and DTO mapping.
+
+### Fixed
+- **Multi-column Select Strings**: Improved `select()` to correctly handle strings with multiple columns (e.g., `.select("id, name")`) by processing each item individually.
+- **DTO Mapping with Aliases**: Fixed an issue where using a table alias would break automatic DTO mapping. Result set columns now use the original table name in aliases (e.g., `AS user__id`) even when the table is aliased in SQL.
+- **Ambiguous Column References**: Resolved issues in `tuple_join_test.rs` where columns from joined tables were incorrectly prefixed with the main table name.
+- **Partial Move Errors**: Fixed Rust compiler errors related to partially moved `self.alias` in `scan`, `scan_as`, and `first` methods.
+
 ## [0.4.12] - 2026-02-27
 
 ### Fixed
