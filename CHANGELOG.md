@@ -8,10 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.16] - 2026-02-28
 
 ### Added
+- **Batch Insert Support**: Introduced `batch_insert()` in `QueryBuilder` for high-performance insertion of multiple records in a single SQL statement.
+- **Native Enum Mapping**: Added `#[derive(BottleEnum)]` and `#[orm(enum)]` attribute to automatically map Rust enums to `TEXT` columns in the database with seamless `Display` and `FromStr` integration.
 - **Expanded WHERE Clause Support**: Added comprehensive support for complex filtering including `OR`, `NOT`, `BETWEEN`, `IN`, and nested grouping (`group`, `or_group`).
 - **GORM-like Raw Filters**: Introduced `where_raw()` and `or_where_raw()` for writing custom SQL filter fragments with automatic placeholder conversion.
 - **Automatic Migration Diffing**: The migrator now automatically detects missing columns and indexes in existing tables and applies `ALTER TABLE` commands to synchronize the database schema with Rust models.
 - **Improved SQLite Compatibility**: Enhanced Query Builder to handle SQLite-specific aliasing and prefixing requirements during complex queries.
+- **Improved Type Decoding**: Refactored macro-generated decoding logic for `DateTime`, `Uuid`, and `Enum` types to be cleaner and more robust using the `?` operator.
 
 ## [0.4.15] - 2026-02-28
 
