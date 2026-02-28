@@ -49,7 +49,7 @@
 
 use futures::future::BoxFuture;
 use heck::ToSnakeCase;
-use sqlx::{any::AnyArguments, Any, Arguments, Decode, Encode, Row, Type};
+use sqlx::{Any, Arguments, Decode, Encode, Row, Type, any::AnyArguments};
 use std::marker::PhantomData;
 use uuid::Uuid;
 
@@ -58,12 +58,12 @@ use uuid::Uuid;
 // ============================================================================
 
 use crate::{
+    AnyImpl, Error,
     any_struct::FromAnyRow,
     database::{Connection, Drivers},
     model::{ColumnInfo, Model},
     temporal::{self, is_temporal_type},
     value_binding::ValueBinder,
-    AnyImpl, Error,
 };
 
 // ============================================================================
@@ -194,6 +194,8 @@ pub struct QueryBuilder<'a, T, E> {
     /// Name of the database table (in original case)
     pub(crate) table_name: &'static str,
 
+    pub(crate) alias: Option<String>,
+
     /// Metadata information about each column
     pub(crate) columns_info: Vec<ColumnInfo>,
 
@@ -211,6 +213,9 @@ pub struct QueryBuilder<'a, T, E> {
 
     /// Collection of JOIN clause to filter entry tables
     pub(crate) joins_clauses: Vec<String>,
+
+    /// Map of table names to their aliases used in JOINS
+    pub(crate) join_aliases: std::collections::HashMap<String, String>,
 
     /// Maximum number of rows to return (LIMIT)
     pub(crate) limit: Option<usize>,
@@ -288,6 +293,7 @@ where
 
         Self {
             tx,
+            alias: None,
             driver,
             table_name,
             columns_info,
@@ -297,6 +303,7 @@ where
             where_clauses: Vec::new(),
             order_clauses: Vec::new(),
             joins_clauses: Vec::new(),
+            join_aliases: std::collections::HashMap::new(),
             group_by_clauses: Vec::new(),
             having_clauses: Vec::new(),
             is_distinct: false,
@@ -306,6 +313,11 @@ where
             with_deleted: false,
             _marker: PhantomData,
         }
+    }
+
+    /// Returns the table name or alias if set.
+    pub(crate) fn get_table_identifier(&self) -> String {
+        self.alias.clone().unwrap_or_else(|| self.table_name.to_snake_case())
     }
 
     // ========================================================================
@@ -362,11 +374,19 @@ where
         V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
     {
         let op_str = op.as_sql();
+        let table_id = self.get_table_identifier();
+        // Check if the column exists in the main table to avoid ambiguous references in JOINS
+        let is_main_col = self.columns.contains(&col.to_snake_case());
         let clause: FilterFn = Box::new(move |query, args, driver, arg_counter| {
             query.push_str(" AND ");
             if let Some((table, column)) = col.split_once(".") {
+                // If explicit table prefix is provided, use it
                 query.push_str(&format!("\"{}\".\"{}\"", table, column));
+            } else if is_main_col {
+                // If it's a known column of the main table, apply the table name/alias prefix
+                query.push_str(&format!("\"{}\".\"{}\"", table_id, col));
             } else {
+                // Otherwise leave it unqualified so the DB can resolve it (or fail if ambiguous)
                 query.push_str(&format!("\"{}\"", col));
             }
             query.push(' ');
@@ -450,6 +470,33 @@ where
         self
     }
 
+    /// Defines a SQL alias for the primary table in the query.
+    ///
+    /// This method allows you to set a short alias for the model's underlying table.
+    /// It is highly recommended when writing complex queries with multiple `JOIN` clauses,
+    /// preventing the need to repeat the full table name in `.filter()`, `.equals()`, or `.select()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `alias` - A string slice representing the alias to be used (e.g., "u", "rp").
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Using 'u' as an alias for the User table
+    /// let results = db.model::<User>()
+    ///     .alias("u")
+    ///     .join("role_permissions rp", "rp.role_id = u.role")
+    ///     .equals("u.id", user_id)
+    ///     .select("u.username, rp.permission_id")
+    ///     .scan_as::<UserPermissionDTO>()
+    ///     .await?;
+    /// ```
+    pub fn alias(mut self, alias: &str) -> Self {
+        self.alias = Some(alias.to_string());
+        self
+    }
+
     /// Placeholder for eager loading relationships (preload).
     ///
     /// This method is reserved for future implementation of relationship preloading.
@@ -509,10 +556,14 @@ where
     /// ```
     pub fn is_null(mut self, col: &str) -> Self {
         let col_owned = col.to_string();
+        let table_id = self.get_table_identifier();
+        let is_main_col = self.columns.contains(&col_owned.to_snake_case());
         let clause: FilterFn = Box::new(move |query, _args, _driver, _arg_counter| {
             query.push_str(" AND ");
             if let Some((table, column)) = col_owned.split_once(".") {
                 query.push_str(&format!("\"{}\".\"{}\"", table, column));
+            } else if is_main_col {
+                query.push_str(&format!("\"{}\".\"{}\"", table_id, col_owned));
             } else {
                 query.push_str(&format!("\"{}\"", col_owned));
             }
@@ -539,10 +590,14 @@ where
     /// ```
     pub fn is_not_null(mut self, col: &str) -> Self {
         let col_owned = col.to_string();
+        let table_id = self.get_table_identifier();
+        let is_main_col = self.columns.contains(&col_owned.to_snake_case());
         let clause: FilterFn = Box::new(move |query, _args, _driver, _arg_counter| {
             query.push_str(" AND ");
             if let Some((table, column)) = col_owned.split_once(".") {
                 query.push_str(&format!("\"{}\".\"{}\"", table, column));
+            } else if is_main_col {
+                query.push_str(&format!("\"{}\".\"{}\"", table_id, col_owned));
             } else {
                 query.push_str(&format!("\"{}\"", col_owned));
             }
@@ -602,10 +657,15 @@ where
             let to_table = second.split_once(".").expect("failed to parse JOIN clause");
             parsed_query = format!("\"{}\".\"{}\" = \"{}\".\"{}\"", ref_table.0, ref_table.1, to_table.0, to_table.1);
         } else {
-            panic!("Failed to parse JOIN, Ex to use: .join(\"table2\", \"table.column = table2.column2\")")
+            panic!("Failed to parse JOIN, Ex to use: .join(\"table2\", \"table2.column = table.column\")")
         }
 
-        self.joins_clauses.push(format!("JOIN \"{}\" ON {}", table, parsed_query));
+        if let Some((table_name, alias)) = table.split_once(" ") {
+            self.join_aliases.insert(table_name.to_snake_case(), alias.to_string());
+            self.joins_clauses.push(format!("JOIN \"{}\" {} ON {}", table_name, alias, parsed_query));
+        } else {
+            self.joins_clauses.push(format!("JOIN \"{}\" ON {}", table, parsed_query));
+        }
         self
     }
 
@@ -619,10 +679,15 @@ where
             let to_table = second.split_once(".").expect("failed to parse JOIN clause");
             parsed_query = format!("\"{}\".\"{}\" = \"{}\".\"{}\"", ref_table.0, ref_table.1, to_table.0, to_table.1);
         } else {
-            panic!("Failed to parse JOIN, Ex to use: .join(\"table2\", \"table.column = table2.column2\")")
+            panic!("Failed to parse JOIN, Ex to use: .join(\"table2\", \"table2.column = table.column\")")
         }
 
-        self.joins_clauses.push(format!("{} JOIN \"{}\" ON {}", join_type, table, parsed_query));
+        if let Some((table_name, alias)) = table.split_once(" ") {
+            self.join_aliases.insert(table_name.to_snake_case(), alias.to_string());
+            self.joins_clauses.push(format!("{} JOIN \"{}\" {} ON {}", join_type, table_name, alias, parsed_query));
+        } else {
+            self.joins_clauses.push(format!("{} JOIN \"{}\" ON {}", join_type, table, parsed_query));
+        }
         self
     }
 
@@ -1339,6 +1404,10 @@ where
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" ");
 
+        if let Some(alias) = &self.alias {
+            query.push_str(&format!("{} ", alias));
+        }
+
         if !self.joins_clauses.is_empty() {
             query.push_str(&self.joins_clauses.join(" "));
         }
@@ -1384,27 +1453,59 @@ where
     ///    ensuring compatibility with the `FromAnyRow` deserialization logic.
     fn select_args_sql<R: AnyImpl>(&self) -> Vec<String> {
         let struct_cols = R::columns();
+        let table_id = self.get_table_identifier();
 
         if !struct_cols.is_empty() {
             if !self.select_columns.is_empty() {
                 let mut args = Vec::new();
+
+                // Flatten potential multi-column strings like "col1, col2"
+                // This ensures each column is processed individually for prefixes and temporal types
+                let mut flat_selects = Vec::new();
+                for s in &self.select_columns {
+                    if s.contains(',') {
+                        for sub in s.split(',') {
+                            flat_selects.push(sub.trim().to_string());
+                        }
+                    } else {
+                        flat_selects.push(s.trim().to_string());
+                    }
+                }
+
                 for col_info in struct_cols {
                     let col_snake = col_info.column.to_snake_case();
                     let sql_type = col_info.sql_type;
-                    if self.select_columns.contains(&col_snake) {
+
+                    // Check if this column (or table.column) is in our select list
+                    // We check against the column name alone OR the table-qualified name
+                    let is_selected = flat_selects.iter().any(|s| {
+                        if s == &col_snake {
+                            return true;
+                        }
+                        if let Some((t, c)) = s.split_once('.') {
+                            let t_clean = t.trim().trim_matches('"');
+                            let c_clean = c.trim().trim_matches('"');
+                            // Matches if the table prefix is either the original table name or the alias
+                            return (t_clean == table_id || t_clean == self.table_name.to_snake_case())
+                                && c_clean == col_snake;
+                        }
+                        false
+                    });
+
+                    if is_selected {
                         if is_temporal_type(sql_type) && matches!(self.driver, Drivers::Postgres) {
-                            if !self.joins_clauses.is_empty() {
+                            if !self.joins_clauses.is_empty() || self.alias.is_some() {
                                 args.push(format!(
                                     "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
-                                    self.table_name.to_snake_case(),
+                                    table_id,
                                     col_snake,
                                     col_snake
                                 ));
                             } else {
                                 args.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake));
                             }
-                        } else if !self.joins_clauses.is_empty() {
-                            args.push(format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col_snake));
+                        } else if !self.joins_clauses.is_empty() || self.alias.is_some() {
+                            args.push(format!("\"{}\".\"{}\"", table_id, col_snake));
                         } else {
                             args.push(format!("\"{}\"", col_snake));
                         }
@@ -1418,8 +1519,28 @@ where
                     .map(|c| {
                         let col_snake = c.column.to_snake_case();
                         let is_omitted = self.omit_columns.contains(&col_snake);
-                        let table_name =
-                            if !c.table.is_empty() { c.table.to_snake_case() } else { self.table_name.to_snake_case() };
+                        
+                        // table_to_alias is used for the result set mapping (AS "table__col")
+                        // It MUST use the original table name snake_cased for the ORM to map it correctly
+                        let table_to_alias = if !c.table.is_empty() {
+                            c.table.to_snake_case()
+                        } else {
+                            self.table_name.to_snake_case()
+                        };
+
+                        // table_to_ref is used in the SELECT clause (SELECT "table"."col")
+                        // It uses the alias if defined, or the original table name
+                        let table_to_ref = if !c.table.is_empty() {
+                            let c_table_snake = c.table.to_snake_case();
+                            if c_table_snake == self.table_name.to_snake_case() {
+                                table_id.clone()
+                            } else {
+                                // Check if we have an alias for this joined table
+                                self.join_aliases.get(&c_table_snake).cloned().unwrap_or(c_table_snake)
+                            }
+                        } else {
+                            table_id.clone()
+                        };
 
                         if is_omitted {
                             // Return type-appropriate placeholder based on sql_type
@@ -1442,14 +1563,14 @@ where
                                 // Default fallback for unknown types
                                 _ => "'omited'",
                             };
-                            format!("{} AS \"{}__{}\"", placeholder, table_name, col_snake)
+                            format!("{} AS \"{}__{}\"", placeholder, table_to_alias, col_snake)
                         } else if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
                             format!(
                                 "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}__{}\"",
-                                table_name, col_snake, table_name, col_snake
+                                table_to_ref, col_snake, table_to_alias, col_snake
                             )
                         } else {
-                            format!("\"{}\".\"{}\" AS \"{}__{}\"", table_name, col_snake, table_name, col_snake)
+                            format!("\"{}\".\"{}\" AS \"{}__{}\"", table_to_ref, col_snake, table_to_alias, col_snake)
                         }
                     })
                     .collect();
@@ -1529,6 +1650,10 @@ where
         query.push_str(" FROM \"");
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" ");
+        if let Some(alias) = &self.alias {
+            query.push_str(&format!("{} ", alias));
+        }
+
         if !self.joins_clauses.is_empty() {
             query.push_str(&self.joins_clauses.join(" "));
         }
@@ -1598,7 +1723,7 @@ where
 
         rows.iter().map(|row| R::from_any_row(row)).collect()
     }
-    
+
     /// Executes the query and maps the result to a custom DTO.
     ///
     /// Ideal for JOINs and projections where the return type is not a full Model.
@@ -1637,33 +1762,43 @@ where
                 self = self.is_null(soft_delete_col);
             }
         }
-    
+
         let mut query = String::from("SELECT ");
         if self.is_distinct {
             query.push_str("DISTINCT ");
         }
-    
+
+        let table_id = self.get_table_identifier();
+
         if self.select_columns.is_empty() {
             let mut select_args = Vec::new();
             let struct_cols = R::columns();
             let main_table_snake = self.table_name.to_snake_case();
-            
+
             for c in struct_cols {
                 let c_name = c.column.to_snake_case();
-                
+
                 // Determine if we should use the table name from AnyInfo
                 // If it matches a joined table or the main table, we use it.
                 // Otherwise (like UserDTO), we default to the main table.
-                let mut table_to_use = main_table_snake.clone();
+                let mut table_to_use = table_id.clone();
                 if !c.table.is_empty() {
                     let c_table_snake = c.table.to_snake_case();
-                    if c_table_snake == main_table_snake || self.joins_clauses.iter().any(|j| j.contains(&format!("JOIN \"{}\"", c_table_snake))) {
-                        table_to_use = c_table_snake;
+                    if c_table_snake == main_table_snake
+                        || self.joins_clauses.iter().any(|j| j.contains(&format!("JOIN \"{}\"", c_table_snake)))
+                    {
+                        if c_table_snake == main_table_snake {
+                            table_to_use = table_id.clone();
+                        } else {
+                            // Use join alias if available
+                            table_to_use = self.join_aliases.get(&c_table_snake).cloned().unwrap_or(c_table_snake);
+                        }
                     }
                 }
 
                 if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
-                    select_args.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", table_to_use, c_name, c_name));
+                    select_args
+                        .push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", table_to_use, c_name, c_name));
                 } else {
                     select_args.push(format!("\"{}\".\"{}\" AS \"{}\"", table_to_use, c_name, c_name));
                 }
@@ -1678,142 +1813,170 @@ where
             let mut select_cols = Vec::with_capacity(self.select_columns.capacity());
             let struct_cols = R::columns();
 
-                        for col in &self.select_columns {
-                            let col_trimmed = col.trim();
-                            if col_trimmed == "*" {
+            // Flatten multi-column strings
+            let mut flat_selects = Vec::new();
+            for s in &self.select_columns {
+                if s.contains(',') {
+                    for sub in s.split(',') {
+                        flat_selects.push(sub.trim().to_string());
+                    }
+                } else {
+                    flat_selects.push(s.trim().to_string());
+                }
+            }
+
+            for col in &flat_selects {
+                let col_trimmed = col.trim();
+                if col_trimmed == "*" {
+                    for c in &self.columns_info {
+                        let c_name = c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case();
+                        let mut is_c_temporal = false;
+                        if let Some(r_info) = struct_cols.iter().find(|rc| rc.column.to_snake_case() == c_name) {
+                            if is_temporal_type(r_info.sql_type) {
+                                is_c_temporal = true;
+                            }
+                        }
+
+                        if is_c_temporal && matches!(self.driver, Drivers::Postgres) {
+                            select_cols.push(format!(
+                                "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                table_id,
+                                c_name,
+                                c_name
+                            ));
+                        } else {
+                            select_cols.push(format!(
+                                "\"{}\".\"{}\" AS \"{}\"",
+                                table_id,
+                                c_name,
+                                c_name
+                            ));
+                        }
+                    }
+                    continue;
+                }
+
+                // Check if this column is temporal in the target DTO
+                let mut is_temporal = false;
+
+                // We need to keep the lowercase string alive to use its slice in col_name
+                let col_lower = col_trimmed.to_lowercase();
+                let mut col_name = col_trimmed;
+
+                // Handle aliases (e.g., "created_at as time" or "user.created_at as time")
+                if let Some((_, alias)) = col_lower.split_once(" as ") {
+                    col_name = alias.trim().trim_matches('"').trim_matches('\'');
+                } else if col_trimmed.contains('.') {
+                    if let Some((_, actual_col)) = col_trimmed.split_once('.') {
+                        col_name = actual_col.trim().trim_matches('"').trim_matches('\'');
+                    }
+                }
+
+                if let Some(info) = struct_cols.iter().find(|c| c.column.to_snake_case() == col_name.to_snake_case()) {
+                    if is_temporal_type(info.sql_type) {
+                        is_temporal = true;
+                    }
+                }
+
+                if col_trimmed.contains('.') {
+                    if let Some((table, column)) = col_trimmed.split_once('.') {
+                        let clean_table = table.trim().trim_matches('"');
+                        let clean_column = column.trim().trim_matches('"').split_whitespace().next().unwrap_or(column);
+
+                        if clean_column == "*" {
+                            let mut expanded = false;
+                            let table_to_compare = clean_table.to_snake_case();
+                            if table_to_compare == self.table_name.to_snake_case() || table_to_compare == table_id {
                                 for c in &self.columns_info {
                                     let c_name = c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case();
                                     let mut is_c_temporal = false;
-                                    if let Some(r_info) = struct_cols.iter().find(|rc| rc.column.to_snake_case() == c_name) {
+                                    if let Some(r_info) =
+                                        struct_cols.iter().find(|rc| rc.column.to_snake_case() == c_name)
+                                    {
                                         if is_temporal_type(r_info.sql_type) {
                                             is_c_temporal = true;
                                         }
                                     }
-            
+
                                     if is_c_temporal && matches!(self.driver, Drivers::Postgres) {
                                         select_cols.push(format!(
                                             "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
-                                            self.table_name.to_snake_case(),
-                                            c_name,
-                                            c_name
+                                            clean_table, c_name, c_name
                                         ));
                                     } else {
-                                        select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", self.table_name.to_snake_case(), c_name, c_name));
+                                        select_cols
+                                            .push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, c_name, c_name));
                                     }
                                 }
-                                continue;
+                                expanded = true;
                             }
-            
-                            // Check if this column is temporal in the target DTO
-                            let mut is_temporal = false;
-            
-                            // We need to keep the lowercase string alive to use its slice in col_name
-                            let col_lower = col_trimmed.to_lowercase();
-                            let mut col_name = col_trimmed;
-            
-                            // Handle aliases (e.g., "created_at as time" or "user.created_at as time")
-                            if let Some((_, alias)) = col_lower.split_once(" as ") {
-                                col_name = alias.trim().trim_matches('"').trim_matches('\'');
-                            } else if col_trimmed.contains('.') {
-                                if let Some((_, actual_col)) = col_trimmed.split_once('.') {
-                                    col_name = actual_col.trim().trim_matches('"').trim_matches('\'');
-                                }
+
+                            if !expanded {
+                                select_cols.push(format!("\"{}\".*", clean_table));
                             }
-            
-                            if let Some(info) = struct_cols.iter().find(|c| c.column.to_snake_case() == col_name.to_snake_case()) {
-                                if is_temporal_type(info.sql_type) {
-                                    is_temporal = true;
-                                }
-                            }
-            
-                            if col_trimmed.contains('.') {
-                                if let Some((table, column)) = col_trimmed.split_once('.') {
-                                    let clean_table = table.trim().trim_matches('"');
-                                    let clean_column = column.trim().trim_matches('"').split_whitespace().next().unwrap_or(column);
-            
-                                    if clean_column == "*" {
-                                        let mut expanded = false;
-                                        if clean_table.to_snake_case() == self.table_name.to_snake_case() {
-                                            for c in &self.columns_info {
-                                                let c_name = c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case();
-                                                let mut is_c_temporal = false;
-                                                if let Some(r_info) = struct_cols.iter().find(|rc| rc.column.to_snake_case() == c_name) {
-                                                    if is_temporal_type(r_info.sql_type) {
-                                                        is_c_temporal = true;
-                                                    }
-                                                }
-            
-                                                if is_c_temporal && matches!(self.driver, Drivers::Postgres) {
-                                                    select_cols.push(format!(
-                                                        "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
-                                                        clean_table, c_name, c_name
-                                                    ));
-                                                } else {
-                                                    select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, c_name, c_name));
-                                                }
-                                            }
-                                            expanded = true;
-                                        }
-            
-                                        if !expanded {
-                                            select_cols.push(format!("\"{}\".*", clean_table));
-                                        }
-                                    } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
-                                        select_cols.push(format!(
-                                            "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
-                                            clean_table, clean_column, col_name
-                                        ));
-                                    } else {
-                                        select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, clean_column, col_name));
-                                    }
-                                }
-                            } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
-                                // Extract column name from potential expression
-                                let clean_col = col_trimmed.trim_matches('"');
-                                select_cols.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", clean_col, col_name));
-                            } else if col_trimmed != col_name {
-                                select_cols.push(format!("{} AS \"{}\"", col_trimmed, col_name));
-                            } else {
-                                select_cols.push(col_trimmed.to_string());
-                            }
+                        } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
+                            select_cols.push(format!(
+                                "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                clean_table, clean_column, col_name
+                            ));
+                        } else {
+                            select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, clean_column, col_name));
                         }
-                        query.push_str(&select_cols.join(", "));
                     }
-            
-    
+                } else if is_temporal && matches!(self.driver, Drivers::Postgres) {
+                    // Extract column name from potential expression
+                    let clean_col = col_trimmed.trim_matches('"');
+                    select_cols.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", table_id, clean_col, col_name));
+                } else if col_trimmed != col_name {
+                    select_cols.push(format!("{} AS \"{}\"", col_trimmed, col_name));
+                } else {
+                    let is_main_col = self.columns.contains(&col_trimmed.to_snake_case());
+                    if is_main_col {
+                        select_cols.push(format!("\"{}\".\"{}\"", table_id, col_trimmed));
+                    } else {
+                        select_cols.push(format!("\"{}\"", col_trimmed));
+                    }
+                }
+            }
+            query.push_str(&select_cols.join(", "));
+        }
+
         // Build FROM clause
         query.push_str(" FROM \"");
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" ");
-        
+        if let Some(alias) = &self.alias {
+            query.push_str(&format!("{} ", alias));
+        }
+
         if !self.joins_clauses.is_empty() {
             query.push_str(&self.joins_clauses.join(" "));
         }
-    
+
         query.push_str(" WHERE 1=1");
-    
+
         let mut args = sqlx::any::AnyArguments::default();
         let mut arg_counter = 1;
-    
+
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.driver, &mut arg_counter);
         }
-    
+
         if !self.group_by_clauses.is_empty() {
             query.push_str(&format!(" GROUP BY {}", self.group_by_clauses.join(", ")));
         }
-    
+
         if !self.having_clauses.is_empty() {
             query.push_str(" HAVING 1=1");
             for clause in &self.having_clauses {
                 clause(&mut query, &mut args, &self.driver, &mut arg_counter);
             }
         }
-    
+
         if !self.order_clauses.is_empty() {
             query.push_str(&format!(" ORDER BY {}", self.order_clauses.join(", ")));
         }
-    
+
         if let Some(limit) = self.limit {
             query.push_str(" LIMIT ");
             match self.driver {
@@ -1825,7 +1988,7 @@ where
             }
             let _ = args.add(limit as i64);
         }
-    
+
         if let Some(offset) = self.offset {
             query.push_str(" OFFSET ");
             match self.driver {
@@ -1836,11 +1999,11 @@ where
             }
             let _ = args.add(offset as i64);
         }
-    
+
         if self.debug_mode {
             log::debug!("SQL: {}", query);
         }
-    
+
         let rows = sqlx::query_with(&query, args).fetch_all(self.tx.executor()).await?;
         rows.iter().map(|row| R::from_any_row(row)).collect()
     }
@@ -1918,6 +2081,9 @@ where
         query.push_str(" FROM \"");
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" ");
+        if let Some(alias) = &self.alias {
+            query.push_str(&format!("{} ", alias));
+        }
         if !self.joins_clauses.is_empty() {
             query.push_str(&self.joins_clauses.join(" "));
         }
@@ -1951,6 +2117,8 @@ where
             .find(|c| c.is_primary_key)
             .map(|c| c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case());
 
+        let table_id = self.get_table_identifier();
+
         // Apply ORDER BY clauses
         // We join multiple clauses with commas to form a valid SQL ORDER BY statement
         if !self.order_clauses.is_empty() {
@@ -1958,7 +2126,7 @@ where
         } else if let Some(pk) = pk_column {
             // Fallback to PK ordering if no custom order is specified (ensures deterministic results)
             query.push_str(" ORDER BY ");
-            query.push_str(&format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), pk));
+            query.push_str(&format!("\"{}\".\"{}\"", table_id, pk));
             query.push_str(" ASC");
         }
 
@@ -2020,13 +2188,20 @@ where
             return Err(sqlx::Error::ColumnNotFound("is not possible get data without column".to_string()));
         }
 
+        let table_id = self.get_table_identifier();
+
         let mut select_cols = Vec::with_capacity(self.select_columns.capacity());
         for col in self.select_columns {
-            if !self.joins_clauses.is_empty() {
+            let is_main_col = self.columns.contains(&col.to_snake_case());
+            if !self.joins_clauses.is_empty() || self.alias.is_some() {
                 if let Some((table, column)) = col.split_once(".") {
                     select_cols.push(format!("\"{}\".\"{}\"", table, column));
+                } else if col.contains('(') {
+                    select_cols.push(col);
+                } else if is_main_col {
+                    select_cols.push(format!("\"{}\".\"{}\"", table_id, col));
                 } else {
-                    select_cols.push(format!("\"{}\".\"{}\"", self.table_name.to_snake_case(), col));
+                    select_cols.push(format!("\"{}\"", col));
                 }
                 continue;
             }
@@ -2039,6 +2214,9 @@ where
         query.push_str(" FROM \"");
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" ");
+        if let Some(alias) = &self.alias {
+            query.push_str(&format!("{} ", alias));
+        }
 
         if !self.joins_clauses.is_empty() {
             query.push_str(&self.joins_clauses.join(" "));
@@ -2157,7 +2335,11 @@ where
 
         Box::pin(async move {
             let table_name = self.table_name.to_snake_case();
-            let mut query = format!("UPDATE \"{}\" SET ", table_name);
+            let mut query = format!("UPDATE \"{}\" ", table_name);
+            if let Some(alias) = &self.alias {
+                query.push_str(&format!("{} ", alias));
+            }
+            query.push_str("SET ");
 
             let mut bindings: Vec<(String, &str)> = Vec::new();
             let mut set_clauses = Vec::new();
@@ -2256,7 +2438,11 @@ where
         if let Some(col) = soft_delete_col {
             // Soft Delete: Update the column to current timestamp
             let table_name = self.table_name.to_snake_case();
-            let mut query = format!("UPDATE \"{}\" SET \"{}\" = ", table_name, col);
+            let mut query = format!("UPDATE \"{}\" ", table_name);
+            if let Some(alias) = &self.alias {
+                query.push_str(&format!("{} ", alias));
+            }
+            query.push_str(&format!("SET \"{}\" = ", col));
 
             match self.driver {
                 Drivers::Postgres => query.push_str("NOW()"),
