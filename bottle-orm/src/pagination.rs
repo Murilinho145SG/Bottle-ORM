@@ -52,11 +52,34 @@ pub struct Paginated<T> {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Pagination {
     /// Zero-based page index
+    #[serde(default)]
     pub page: usize,
+    
     /// Number of items per page
+    #[serde(default = "default_limit")]
     pub limit: usize,
+    
     /// Maximum allowed items per page (safety limit)
+    #[serde(default = "default_max_limit", skip_deserializing)]
     pub max_limit: usize,
+}
+
+/// Sets defaults values to limit.
+fn default_limit() -> usize {
+    10
+}
+
+
+/// Sets max values to cap queries in database.
+fn default_max_limit() -> usize {
+	100
+}
+
+/// Default for axum headers
+impl Default for Pagination {
+    fn default() -> Self {
+        Self { page: 0, limit: 10, max_limit: 100 }
+    }
 }
 
 impl Pagination {
