@@ -1851,7 +1851,20 @@ where
         if self.select_columns.is_empty() {
             query.push('*');
         } else {
-            query.push_str(&self.select_columns.join(", "));
+            let mut quoted_cols = Vec::new();
+            for s in &self.select_columns {
+                for sub in s.split(',') {
+                    let sub_trimmed = sub.trim();
+                    if sub_trimmed.contains('(') || sub_trimmed == "*" || sub_trimmed.ends_with(".*") {
+                        quoted_cols.push(sub_trimmed.to_string());
+                    } else if let Some((t, c)) = sub_trimmed.split_once('.') {
+                        quoted_cols.push(format!("\"{}\".\"{}\"", t.trim_matches('"'), c.trim_matches('"')));
+                    } else {
+                        quoted_cols.push(format!("\"{}\"", sub_trimmed.trim_matches('"')));
+                    }
+                }
+            }
+            query.push_str(&quoted_cols.join(", "));
         }
 
         query.push_str(" FROM \"");
@@ -1917,7 +1930,6 @@ where
                 let mut args = Vec::new();
 
                 // Flatten potential multi-column strings like "col1, col2"
-                // This ensures each column is processed individually for prefixes and temporal types
                 let mut flat_selects = Vec::new();
                 for s in &self.select_columns {
                     if s.contains(',') {
@@ -1929,34 +1941,45 @@ where
                     }
                 }
 
+                // Check if there's an asterisk for the main table or all tables
+                let has_main_star = flat_selects.iter().any(|s| {
+                    s == "*"
+                        || s == &format!("{}.*", table_id)
+                        || s == &format!("{}.*", self.table_name.to_snake_case())
+                });
+
+                let mut matched_flat_indices = std::collections::HashSet::new();
+
                 for col_info in struct_cols {
                     let col_snake = col_info.column.to_snake_case();
                     let sql_type = col_info.sql_type;
 
-                    // Check if this column (or table.column) is in our select list
-                    // We check against the column name alone OR the table-qualified name
-                    let is_selected = flat_selects.iter().any(|s| {
+                    // A column is selected if:
+                    // 1. There is a '*' that covers it
+                    // 2. Its name is explicitly in the select list
+                    let mut is_explicitly_selected = false;
+                    for (idx, s) in flat_selects.iter().enumerate() {
                         if s == &col_snake {
-                            return true;
-                        }
-                        if let Some((t, c)) = s.split_once('.') {
+                            is_explicitly_selected = true;
+                            matched_flat_indices.insert(idx);
+                        } else if let Some((t, c)) = s.split_once('.') {
                             let t_clean = t.trim().trim_matches('"');
                             let c_clean = c.trim().trim_matches('"');
-                            // Matches if the table prefix is either the original table name or the alias
-                            return (t_clean == table_id || t_clean == self.table_name.to_snake_case())
-                                && c_clean == col_snake;
+                            if (t_clean == table_id || t_clean == self.table_name.to_snake_case())
+                                && c_clean == col_snake
+                            {
+                                is_explicitly_selected = true;
+                                matched_flat_indices.insert(idx);
+                            }
                         }
-                        false
-                    });
+                    }
 
-                    if is_selected {
+                    if has_main_star || is_explicitly_selected {
                         if is_temporal_type(sql_type) && matches!(self.driver, Drivers::Postgres) {
                             if !self.joins_clauses.is_empty() || self.alias.is_some() {
                                 args.push(format!(
                                     "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
-                                    table_id,
-                                    col_snake,
-                                    col_snake
+                                    table_id, col_snake, col_snake
                                 ));
                             } else {
                                 args.push(format!("to_json(\"{}\") #>> '{{}}' AS \"{}\"", col_snake, col_snake));
@@ -1968,8 +1991,35 @@ where
                         }
                     }
                 }
+
+                // Add any remaining manual selects that didn't match our struct columns
+                // (e.g., custom aggregate functions or columns from joined tables not in the DTO)
+                for (idx, s) in flat_selects.iter().enumerate() {
+                    if !matched_flat_indices.contains(&idx)
+                        && s != "*"
+                        && s != &format!("{}.*", table_id)
+                        && s != &format!("{}.*", self.table_name.to_snake_case())
+                    {
+                        // If it's a known temporal type in a joined table, we might still need a cast,
+                        // but we don't have the type info for joined tables here.
+                        // However, we can try to wrap potential columns in to_json if they look like they need it,
+                        // but it's safer to let the user handle it or use a proper DTO.
+                        if s.contains('(') {
+                            args.push(s.clone());
+                        } else {
+                            // If it has a dot, quote the parts
+                            if let Some((t, c)) = s.split_once('.') {
+                                args.push(format!("\"{}\".\"{}\"", t.trim_matches('"'), c.trim_matches('"')));
+                            } else {
+                                args.push(format!("\"{}\"", s.trim_matches('"')));
+                            }
+                        }
+                    }
+                }
+
                 return args;
             } else {
+                // ... (rest of the code for default select remains the same)
                 // For omitted columns, return 'omited' as placeholder value
                 return struct_cols
                     .iter()
@@ -2346,7 +2396,29 @@ where
                         if clean_column == "*" {
                             let mut expanded = false;
                             let table_to_compare = clean_table.to_snake_case();
-                            if table_to_compare == self.table_name.to_snake_case() || table_to_compare == table_id {
+
+                            // Try to expand from struct_cols first (supports joined tables if they are in the DTO)
+                            for c in &struct_cols {
+                                let c_table_snake = c.table.to_snake_case();
+                                let table_matches = c_table_snake == table_to_compare
+                                    || self.join_aliases.get(&c_table_snake).map(|a| a == clean_table).unwrap_or(false);
+
+                                if table_matches {
+                                    let c_name = c.column.to_snake_case();
+                                    if is_temporal_type(c.sql_type) && matches!(self.driver, Drivers::Postgres) {
+                                        select_cols.push(format!(
+                                            "to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"",
+                                            clean_table, c_name, c_name
+                                        ));
+                                    } else {
+                                        select_cols.push(format!("\"{}\".\"{}\" AS \"{}\"", clean_table, c_name, c_name));
+                                    }
+                                    expanded = true;
+                                }
+                            }
+
+                            // Fallback to columns_info if it's the main table and not fully expanded yet
+                            if !expanded && (table_to_compare == self.table_name.to_snake_case() || table_to_compare == table_id) {
                                 for c in &self.columns_info {
                                     let c_name = c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case();
                                     let mut is_c_temporal = false;
