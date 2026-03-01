@@ -5,12 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.21] - 2026-02-28
+## [0.4.22] - 2026-02-28
 
 ### Added
-- **Pagination Enhancements**: Added `Default` implementation and Serde defaults for the `Pagination` struct to improve compatibility with Axum extractors.
+- **Join Parameter Binding**: Introduced `join_raw`, `left_join_raw`, `inner_join_raw`, and other raw join methods that support SQL placeholders (`?`) and value binding.
+- **Flexible Joins**: Refactored the internal join system to use closures (similar to WHERE clauses), allowing for more complex join conditions beyond simple column equality.
 
-## [0.4.20] - 2026-02-28
+## [0.4.21] - 2026-02-28
 
 ### Fixed
 - **Any Driver Registration**: Added automatic call to `sqlx::any::install_default_drivers()` in `Database::connect()` to prevent panics when using the `Any` driver with newer SQLx versions.

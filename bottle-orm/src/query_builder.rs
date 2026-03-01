@@ -218,7 +218,7 @@ pub struct QueryBuilder<T, E> {
     pub(crate) order_clauses: Vec<String>,
 
     /// Collection of JOIN clause to filter entry tables
-    pub(crate) joins_clauses: Vec<String>,
+    pub(crate) joins_clauses: Vec<FilterFn>,
 
     /// Map of table names to their aliases used in JOINS
     pub(crate) join_aliases: std::collections::HashMap<String, String>,
@@ -927,46 +927,129 @@ where
     /// ```rust,ignore
     /// query.join("posts", "users.id = posts.user_id")
     /// ```
-    pub fn join(mut self, table: &str, s_query: &str) -> Self {
-        let trimmed_value = s_query.replace(" ", "");
-        let values = trimmed_value.split_once("=");
-        let parsed_query: String;
-        if let Some((first, second)) = values {
-            let ref_table = first.split_once(".").expect("failed to parse JOIN clause");
-            let to_table = second.split_once(".").expect("failed to parse JOIN clause");
-            parsed_query = format!("\"{}\".\"{}\" = \"{}\".\"{}\"", ref_table.0, ref_table.1, to_table.0, to_table.1);
-        } else {
-            panic!("Failed to parse JOIN, Ex to use: .join(\"table2\", \"table2.column = table.column\")")
-        }
-
-        if let Some((table_name, alias)) = table.split_once(" ") {
-            self.join_aliases.insert(table_name.to_snake_case(), alias.to_string());
-            self.joins_clauses.push(format!("JOIN \"{}\" {} ON {}", table_name, alias, parsed_query));
-        } else {
-            self.joins_clauses.push(format!("JOIN \"{}\" ON {}", table, parsed_query));
-        }
-        self
+    pub fn join(self, table: &str, s_query: &str) -> Self {
+        self.join_generic("", table, s_query)
     }
 
     /// Internal helper for specific join types
     fn join_generic(mut self, join_type: &str, table: &str, s_query: &str) -> Self {
+        let table_owned = table.to_string();
+        let join_type_owned = join_type.to_string();
+        
         let trimmed_value = s_query.replace(" ", "");
         let values = trimmed_value.split_once("=");
-        let parsed_query: String;
+        let mut parsed_query = s_query.to_string();
+        
         if let Some((first, second)) = values {
-            let ref_table = first.split_once(".").expect("failed to parse JOIN clause");
-            let to_table = second.split_once(".").expect("failed to parse JOIN clause");
-            parsed_query = format!("\"{}\".\"{}\" = \"{}\".\"{}\"", ref_table.0, ref_table.1, to_table.0, to_table.1);
-        } else {
-            panic!("Failed to parse JOIN, Ex to use: .join(\"table2\", \"table2.column = table.column\")")
+            // Try to parse table.column = table.column
+            if let Some((t1, c1)) = first.split_once('.') {
+                if let Some((t2, c2)) = second.split_once('.') {
+                    parsed_query = format!("\"{}\".\"{}\" = \"{}\".\"{}\"", t1, c1, t2, c2);
+                }
+            }
         }
 
         if let Some((table_name, alias)) = table.split_once(" ") {
             self.join_aliases.insert(table_name.to_snake_case(), alias.to_string());
-            self.joins_clauses.push(format!("{} JOIN \"{}\" {} ON {}", join_type, table_name, alias, parsed_query));
-        } else {
-            self.joins_clauses.push(format!("{} JOIN \"{}\" ON {}", join_type, table, parsed_query));
         }
+
+        self.joins_clauses.push(Box::new(move |query, _args, _driver, _arg_counter| {
+            if let Some((table_name, alias)) = table_owned.split_once(" ") {
+                query.push_str(&format!("{} JOIN \"{}\" {} ON {}", join_type_owned, table_name, alias, parsed_query));
+            } else {
+                query.push_str(&format!("{} JOIN \"{}\" ON {}", join_type_owned, table_owned, parsed_query));
+            }
+        }));
+        self
+    }
+
+    /// Adds a raw JOIN clause with a placeholder and a bound value.
+    ///
+    /// This is useful for joining tables with conditions that involve external values.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.model::<Permissions>()
+    ///     .join_raw("role_permissions rp", "rp.role_id = ?", role_id)
+    ///     .scan()
+    ///     .await?;
+    /// ```
+    pub fn join_raw<V>(mut self, table: &str, on: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.join_generic_raw("", table, on, value)
+    }
+
+    /// Adds a raw LEFT JOIN clause with a placeholder and a bound value.
+    pub fn left_join_raw<V>(mut self, table: &str, on: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.join_generic_raw("LEFT", table, on, value)
+    }
+
+    /// Adds a raw RIGHT JOIN clause with a placeholder and a bound value.
+    pub fn right_join_raw<V>(mut self, table: &str, on: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.join_generic_raw("RIGHT", table, on, value)
+    }
+
+    /// Adds a raw INNER JOIN clause with a placeholder and a bound value.
+    pub fn inner_join_raw<V>(mut self, table: &str, on: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.join_generic_raw("INNER", table, on, value)
+    }
+
+    /// Adds a raw FULL JOIN clause with a placeholder and a bound value.
+    pub fn full_join_raw<V>(mut self, table: &str, on: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        self.join_generic_raw("FULL", table, on, value)
+    }
+
+    /// Internal helper for raw join types
+    fn join_generic_raw<V>(mut self, join_type: &str, table: &str, on: &str, value: V) -> Self
+    where
+        V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
+    {
+        let table_owned = table.to_string();
+        let on_owned = on.to_string();
+        let join_type_owned = join_type.to_string();
+        
+        if let Some((table_name, alias)) = table.split_once(" ") {
+            self.join_aliases.insert(table_name.to_snake_case(), alias.to_string());
+        }
+
+        self.joins_clauses.push(Box::new(move |query, args, driver, arg_counter| {
+            if let Some((table_name, alias)) = table_owned.split_once(" ") {
+                query.push_str(&format!("{} JOIN \"{}\" {} ON ", join_type_owned, table_name, alias));
+            } else {
+                query.push_str(&format!("{} JOIN \"{}\" ON ", join_type_owned, table_owned));
+            }
+
+            let mut processed_on = on_owned.clone();
+            if let Some(pos) = processed_on.find('?') {
+                let placeholder = match driver {
+                    Drivers::Postgres => {
+                        let p = format!("${}", arg_counter);
+                        *arg_counter += 1;
+                        p
+                    }
+                    _ => "?".to_string(),
+                };
+                processed_on.replace_range(pos..pos + 1, &placeholder);
+            }
+            
+            query.push_str(&processed_on);
+            let _ = args.add(value.clone());
+        }));
         self
     }
 
@@ -1720,15 +1803,18 @@ where
             query.push_str(&format!("{} ", alias));
         }
 
-        if !self.joins_clauses.is_empty() {
-            query.push_str(&self.joins_clauses.join(" "));
-        }
-
-        query.push_str(" WHERE 1=1");
-
         // Apply WHERE clauses with dummy arguments
         let mut dummy_args = AnyArguments::default();
         let mut dummy_counter = 1;
+
+        if !self.joins_clauses.is_empty() {
+            for join_clause in &self.joins_clauses {
+                query.push(' ');
+                join_clause(&mut query, &mut dummy_args, &self.driver, &mut dummy_counter);
+            }
+        }
+
+        query.push_str(" WHERE 1=1");
 
         for clause in &self.where_clauses {
             clause(&mut query, &mut dummy_args, &self.driver, &mut dummy_counter);
@@ -1966,16 +2052,19 @@ where
             query.push_str(&format!("{} ", alias));
         }
 
+        let mut args = AnyArguments::default();
+        let mut arg_counter = 1;
+
         if !self.joins_clauses.is_empty() {
-            query.push_str(&self.joins_clauses.join(" "));
+            for join_clause in &self.joins_clauses {
+                query.push(' ');
+                join_clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+            }
         }
 
         query.push_str(" WHERE 1=1");
 
         // Apply WHERE clauses
-        let mut args = AnyArguments::default();
-        let mut arg_counter = 1;
-
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.driver, &mut arg_counter);
         }
@@ -2097,7 +2186,7 @@ where
                 if !c.table.is_empty() {
                     let c_table_snake = c.table.to_snake_case();
                     if c_table_snake == main_table_snake
-                        || self.joins_clauses.iter().any(|j| j.contains(&format!("JOIN \"{}\"", c_table_snake)))
+                        || self.join_aliases.contains_key(&c_table_snake)
                     {
                         if c_table_snake == main_table_snake {
                             table_to_use = table_id.clone();
@@ -2261,14 +2350,17 @@ where
             query.push_str(&format!("{} ", alias));
         }
 
+        let mut args = sqlx::any::AnyArguments::default();
+        let mut arg_counter = 1;
+
         if !self.joins_clauses.is_empty() {
-            query.push_str(&self.joins_clauses.join(" "));
+            for join_clause in &self.joins_clauses {
+                query.push(' ');
+                join_clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+            }
         }
 
         query.push_str(" WHERE 1=1");
-
-        let mut args = sqlx::any::AnyArguments::default();
-        let mut arg_counter = 1;
 
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.driver, &mut arg_counter);
@@ -2396,16 +2488,20 @@ where
         if let Some(alias) = &self.alias {
             query.push_str(&format!("{} ", alias));
         }
+
+        let mut args = AnyArguments::default();
+        let mut arg_counter = 1;
+
         if !self.joins_clauses.is_empty() {
-            query.push_str(&self.joins_clauses.join(" "));
+            for join_clause in &self.joins_clauses {
+                query.push(' ');
+                join_clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+            }
         }
 
         query.push_str(" WHERE 1=1");
 
         // Apply WHERE clauses
-        let mut args = AnyArguments::default();
-        let mut arg_counter = 1;
-
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.driver, &mut arg_counter);
         }
@@ -2555,16 +2651,19 @@ where
             query.push_str(&format!("{} ", alias));
         }
 
+        let mut args = AnyArguments::default();
+        let mut arg_counter = 1;
+
         if !self.joins_clauses.is_empty() {
-            query.push_str(&self.joins_clauses.join(" "));
+            for join_clause in &self.joins_clauses {
+                query.push(' ');
+                join_clause(&mut query, &mut args, &self.driver, &mut arg_counter);
+            }
         }
 
         query.push_str(" WHERE 1=1");
 
         // Apply WHERE clauses
-        let mut args = AnyArguments::default();
-        let mut arg_counter = 1;
-
         for clause in &self.where_clauses {
             clause(&mut query, &mut args, &self.driver, &mut arg_counter);
         }
