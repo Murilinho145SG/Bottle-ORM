@@ -100,28 +100,64 @@ pub fn expand(input: DeriveInput) -> TokenStream {
                 }
             }
         } else if is_datetime(field_type) {
-            quote! {
-                let #field_name: #field_type = {
-                     let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name)).map_err(|e| sqlx::Error::ColumnDecode {
-                        index: #column_name.to_string(),
-                        source: Box::new(e)
-                    })?;
+            let (_, is_nullable) = rust_type_to_sql(field_type);
+            if is_nullable {
+                let inner_type = get_inner_type(field_type).unwrap_or(field_type);
+                quote! {
+                    let #field_name: #field_type = {
+                         let s: Option<String> = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name)).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: #column_name.to_string(),
+                            source: Box::new(e)
+                        })?;
 
-                     s.parse::<chrono::DateTime<chrono::Utc>>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
-                };
+                         match s {
+                             Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?),
+                             None => None,
+                         }
+                    };
+                }
+            } else {
+                quote! {
+                    let #field_name: #field_type = {
+                         let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name)).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: #column_name.to_string(),
+                            source: Box::new(e)
+                        })?;
+
+                         s.parse::<chrono::DateTime<chrono::Utc>>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+                    };
+                }
             }
         } else if is_uuid(field_type) {
-            // Special handling for Uuid fields: parse from string
-            // UUIDs are typically returned as strings from the database when using AnyRow
-            quote! {
-                let #field_name: #field_type = {
-                     let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name)).map_err(|e| sqlx::Error::ColumnDecode {
-                        index: #column_name.to_string(),
-                        source: Box::new(e)
-                    })?;
+            let (_, is_nullable) = rust_type_to_sql(field_type);
+            if is_nullable {
+                let inner_type = get_inner_type(field_type).unwrap_or(field_type);
+                quote! {
+                    let #field_name: #field_type = {
+                         let s: Option<String> = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name)).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: #column_name.to_string(),
+                            source: Box::new(e)
+                        })?;
 
-                     s.parse::<uuid::Uuid>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
-                };
+                         match s {
+                             Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?),
+                             None => None,
+                         }
+                    };
+                }
+            } else {
+                // Special handling for Uuid fields: parse from string
+                // UUIDs are typically returned as strings from the database when using AnyRow
+                quote! {
+                    let #field_name: #field_type = {
+                         let s: String = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name)).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: #column_name.to_string(),
+                            source: Box::new(e)
+                        })?;
+
+                         s.parse::<uuid::Uuid>().map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+                    };
+                }
             }
         } else {
             // Standard handling for other types
@@ -152,25 +188,19 @@ pub fn expand(input: DeriveInput) -> TokenStream {
         if is_enum || is_datetime(field_type) || is_uuid(field_type) {
             let (_, is_nullable) = rust_type_to_sql(field_type);
             if is_nullable {
-                if let Some(inner_type) = get_inner_type(field_type) {
-                    quote! {
-                        let #field_name: #field_type = {
-                            let s: Option<String> = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
-                                index: index.to_string(),
-                                source: Box::new(e)
-                            })?;
-                            *index += 1;
-                            match s {
-                                Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))),
-                                None => None,
-                            }
-                        };
-                    }
-                } else {
-                    quote! {
-                        let #field_name: #field_type = row.try_get(*index)?;
+                let inner_type = get_inner_type(field_type).unwrap_or(field_type);
+                quote! {
+                    let #field_name: #field_type = {
+                        let s: Option<String> = row.try_get(*index).map_err(|e| sqlx::Error::ColumnDecode {
+                            index: index.to_string(),
+                            source: Box::new(e)
+                        })?;
                         *index += 1;
-                    }
+                        match s {
+                            Some(s_val) => Some(s_val.parse::<#inner_type>().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse value: {}", e)))))?),
+                            None => None,
+                        }
+                    };
                 }
             } else {
                 quote! {
@@ -180,7 +210,7 @@ pub fn expand(input: DeriveInput) -> TokenStream {
                             source: Box::new(e)
                         })?;
                          *index += 1;
-                         s.parse().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse enum: {}", e)))))?
+                         s.parse::<#field_type>().map_err(|e| sqlx::Error::Decode(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse value: {}", e)))))?
                     };
                 }
             }
@@ -290,20 +320,38 @@ pub fn expand(input: DeriveInput) -> TokenStream {
 
 /// Checks if the given type is a DateTime type.
 fn is_datetime(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-            && segment.ident == "DateTime" {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "DateTime" {
                 return true;
             }
+            if segment.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return is_datetime(inner_ty);
+                    }
+                }
+            }
+        }
+    }
     false
 }
 
 /// Checks if the given type is a Uuid type.
 fn is_uuid(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-            && segment.ident == "Uuid" {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Uuid" {
                 return true;
             }
+            if segment.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return is_uuid(inner_ty);
+                    }
+                }
+            }
+        }
+    }
     false
 }
