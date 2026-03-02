@@ -2650,23 +2650,23 @@ where
             }
         }
 
-        // Find primary key column for consistent ordering
-        let pk_column = T::columns()
-            .iter()
-            .find(|c| c.is_primary_key)
-            .map(|c| c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case());
-
         let table_id = self.get_table_identifier();
+
+        // Find primary key columns for consistent ordering
+        let pk_columns: Vec<String> = T::columns()
+            .iter()
+            .filter(|c| c.is_primary_key)
+            .map(|c| format!("\"{}\".\"{}\"", table_id, c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case()))
+            .collect();
 
         // Apply ORDER BY clauses
         // We join multiple clauses with commas to form a valid SQL ORDER BY statement
         if !self.order_clauses.is_empty() {
             query.push_str(&format!(" ORDER BY {}", self.order_clauses.join(", ")));
-        } else if let Some(pk) = pk_column {
+        } else if !pk_columns.is_empty() {
             // Fallback to PK ordering if no custom order is specified (ensures deterministic results)
             query.push_str(" ORDER BY ");
-            query.push_str(&format!("\"{}\".\"{}\"", table_id, pk));
-            query.push_str(" ASC");
+            query.push_str(&pk_columns.iter().map(|col| format!("{} ASC", col)).collect::<Vec<_>>().join(", "));
         }
 
         // Always add LIMIT 1 for first() queries

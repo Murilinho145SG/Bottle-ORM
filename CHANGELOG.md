@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.27] - 2026-03-01
+
+### Fixed
+- **Composite Primary Key Support**: Fixed `CREATE TABLE` logic to properly handle composite primary keys by using a table-level `PRIMARY KEY` constraint instead of multiple inline markers, which caused "multiple primary keys" errors on PostgreSQL and SQLite.
+- **Deterministic Ordering**: Enhanced `first()` to use all primary key columns for fallback ordering when no specific order is requested, ensuring consistent results for models with composite primary keys.
+
 ## [0.4.26] - 2026-03-01
 
 ### Fixed

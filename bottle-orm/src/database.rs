@@ -147,13 +147,21 @@ impl Database {
         let mut column_defs = Vec::new();
         let mut indexes = Vec::new();
 
+        // Identify primary key columns
+        let pk_columns: Vec<String> = columns.iter()
+            .filter(|c| c.is_primary_key)
+            .map(|c| format!("\"{}\"", c.name.strip_prefix("r#").unwrap_or(c.name).to_snake_case()))
+            .collect();
+
         for col in columns {
             let col_name_clean = col.name.strip_prefix("r#").unwrap_or(col.name).to_snake_case();
             let mut def = format!("\"{}\" {}", col_name_clean, col.sql_type);
 
-            if col.is_primary_key {
+            // If it's a single primary key, we can keep it inline for simplicity
+            // If it's composite, we MUST define it as a table constraint
+            if col.is_primary_key && pk_columns.len() == 1 {
                 def.push_str(" PRIMARY KEY");
-            } else if !col.is_nullable {
+            } else if !col.is_nullable || col.is_primary_key {
                 def.push_str(" NOT NULL");
             }
 
@@ -169,6 +177,11 @@ impl Database {
             }
 
             column_defs.push(def);
+        }
+
+        // Add composite primary key if multiple columns are specified
+        if pk_columns.len() > 1 {
+            column_defs.push(format!("PRIMARY KEY ({})", pk_columns.join(", ")));
         }
 
         query.push_str(&column_defs.join(", "));
