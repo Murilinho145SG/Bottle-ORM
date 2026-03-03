@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-03-03
+
+### Fixed
+- **Infinite Loop Fix**: Resolved a critical deadlock caused by an infinite loop in raw SQL placeholder replacement.
+- **Auto-Placeholder Injection**: Improved `where_raw` and `update_raw` to automatically append `?` or ` = ?` when a value is provided but the SQL string is incomplete (e.g., ends with an operator). This fixes "syntax error at end of input" in PostgreSQL.
+- **Update Alias Syntax**: Fixed `update_raw` to use the correct `AS` syntax for aliases, ensuring compatibility with SQLite and PostgreSQL.
+
 ## [0.5.0] - 2026-03-02
 
 ### Added

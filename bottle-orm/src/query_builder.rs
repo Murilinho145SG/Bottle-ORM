@@ -888,16 +888,25 @@ where
             query.push_str(joiner);
             
             let mut processed_sql = sql_owned.clone();
-            if let Some(pos) = processed_sql.find('?') {
-                let placeholder = match driver {
-                    Drivers::Postgres => {
-                        let p = format!("${}", arg_counter);
-                        *arg_counter += 1;
-                        p
-                    }
-                    _ => "?".to_string(),
-                };
-                processed_sql.replace_range(pos..pos + 1, &placeholder);
+            
+            // If no placeholder is found, try to be helpful
+            if !processed_sql.contains('?') {
+                let trimmed = processed_sql.trim();
+                if trimmed.ends_with('=') || trimmed.ends_with('>') || trimmed.ends_with('<') || trimmed.to_uppercase().ends_with(" LIKE") {
+                    processed_sql.push_str(" ?");
+                } else if !trimmed.contains(' ') && !trimmed.contains('(') {
+                    // It looks like just a column name
+                    processed_sql.push_str(" = ?");
+                }
+            }
+
+            // Replace '?' with driver-specific placeholders only if needed
+            if matches!(driver, Drivers::Postgres) {
+                while let Some(pos) = processed_sql.find('?') {
+                    let placeholder = format!("${}", arg_counter);
+                    *arg_counter += 1;
+                    processed_sql.replace_range(pos..pos + 1, &placeholder);
+                }
             }
             
             query.push_str(&processed_sql);
@@ -2594,7 +2603,7 @@ where
             let table_name = self.table_name.to_snake_case();
             let mut query = format!("UPDATE \"{}\" ", table_name);
             if let Some(alias) = &self.alias {
-                query.push_str(&format!("{} ", alias));
+                query.push_str(&format!("AS {} ", alias));
             }
             query.push_str("SET ");
 
@@ -2602,29 +2611,24 @@ where
             let mut args = AnyArguments::default();
 
             let mut processed_expr = expr_owned.clone();
-            if let Some(pos) = processed_expr.find('?') {
-                let placeholder = match self.driver {
-                    Drivers::Postgres => {
-                        let p = format!("${}", arg_counter);
+            let mut has_placeholder = false;
+
+            if processed_expr.contains('?') {
+                has_placeholder = true;
+                if matches!(self.driver, Drivers::Postgres) {
+                    while let Some(pos) = processed_expr.find('?') {
+                        let placeholder = format!("${}", arg_counter);
                         arg_counter += 1;
-                        p
+                        processed_expr.replace_range(pos..pos + 1, &placeholder);
                     }
-                    _ => "?".to_string(),
-                };
-                processed_expr.replace_range(pos..pos + 1, &placeholder);
+                }
+            }
+
+            if has_placeholder {
                 let _ = args.add(value_owned);
-            } else {
-                // If no placeholder, we still add the value to match where_raw behavior, 
-                // but increment the counter if it's Postgres to avoid offset issues
-                // Actually, if there's no ?, Postgres doesn't care about the extra arg if we don't use it.
-                // But the next arg_counter must be correct.
-                // If we don't increment arg_counter here, the NEXT placeholder will use $1.
-                // If we ADDED a value to args, $1 will point to THIS value.
-                // So if we don't use ?, we probably SHOULD NOT add to args.
             }
 
             query.push_str(&format!("\"{}\" = {}", col_name_clean, processed_expr));
-
             query.push_str(" WHERE 1=1");
 
             for clause in &self.where_clauses {
