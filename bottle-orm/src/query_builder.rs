@@ -2218,8 +2218,50 @@ where
         let struct_cols = R::columns();
         let table_id = self.get_table_identifier();
         let main_table_snake = self.table_name.to_snake_case();
+        
         if struct_cols.is_empty() {
             if self.select_columns.is_empty() { return vec!["*".to_string()]; }
+            
+            // If result type is a tuple or primitive (struct_cols is empty),
+            // we still need to handle temporal types for Postgres.
+            if matches!(self.driver, Drivers::Postgres) {
+                let mut args = Vec::new();
+                for s in &self.select_columns {
+                    for sub in s.split(',') {
+                        let s_trim = sub.trim();
+                        if s_trim.contains(' ') || s_trim.contains('(') {
+                            args.push(s_trim.to_string());
+                            continue;
+                        }
+
+                        let (t, c) = if let Some((t, c)) = s_trim.split_once('.') {
+                            (t.trim().trim_matches('"'), c.trim().trim_matches('"'))
+                        } else {
+                            (table_id.as_str(), s_trim.trim_matches('"'))
+                        };
+
+                        let c_snake = c.to_snake_case();
+                        let mut is_temporal = false;
+                        
+                        // Check if this column is known to be temporal
+                        if let Some(info) = self.columns_info.iter().find(|info| {
+                            info.name.to_snake_case() == c_snake
+                        }) {
+                            if is_temporal_type(info.sql_type) {
+                                is_temporal = true;
+                            }
+                        }
+
+                        if is_temporal {
+                            args.push(format!("to_json(\"{}\".\"{}\") #>> '{{}}' AS \"{}\"", t, c, c));
+                        } else {
+                            args.push(format!("\"{}\".\"{}\"", t, c));
+                        }
+                    }
+                }
+                return args;
+            }
+            
             return self.select_columns.clone();
         }
         let mut flat_selects = Vec::new();

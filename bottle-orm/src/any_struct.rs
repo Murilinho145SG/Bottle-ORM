@@ -124,8 +124,8 @@ impl AnyImpl for uuid::Uuid {
 
 impl FromAnyRow for uuid::Uuid {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
-        s.parse().map_err(|e| Error::Decode(Box::new(e)))
+        let mut index = 0;
+        Self::from_any_row_at(row, &mut index)
     }
 
     fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
@@ -146,14 +146,26 @@ impl AnyImpl for chrono::NaiveDateTime {
 
 impl FromAnyRow for chrono::NaiveDateTime {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
-        crate::temporal::parse_naive_datetime(&s).map_err(|e| Error::Decode(Box::new(e)))
+        let mut index = 0;
+        Self::from_any_row_at(row, &mut index)
     }
 
     fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
-        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
-        *index += 1;
-        crate::temporal::parse_naive_datetime(&s).map_err(|e| Error::Decode(Box::new(e)))
+        let res = row.try_get::<String, _>(*index);
+        match res {
+            Ok(s) => {
+                *index += 1;
+                crate::temporal::parse_naive_datetime(&s).map_err(|e| Error::Decode(Box::new(e)))
+            }
+            Err(e) => {
+                // Try numeric fallback (some drivers might return i64 for timestamps)
+                if let Ok(i) = row.try_get::<i64, _>(*index) {
+                    *index += 1;
+                    return Ok(chrono::DateTime::from_timestamp(i, 0).map(|dt| dt.naive_utc()).unwrap_or_default());
+                }
+                Err(Error::Decode(Box::new(e)))
+            }
+        }
     }
 }
 
@@ -168,8 +180,8 @@ impl AnyImpl for chrono::NaiveDate {
 
 impl FromAnyRow for chrono::NaiveDate {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
-        crate::temporal::parse_naive_date(&s).map_err(|e| Error::Decode(Box::new(e)))
+        let mut index = 0;
+        Self::from_any_row_at(row, &mut index)
     }
 
     fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
@@ -190,8 +202,8 @@ impl AnyImpl for chrono::NaiveTime {
 
 impl FromAnyRow for chrono::NaiveTime {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
-        crate::temporal::parse_naive_time(&s).map_err(|e| Error::Decode(Box::new(e)))
+        let mut index = 0;
+        Self::from_any_row_at(row, &mut index)
     }
 
     fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
@@ -212,14 +224,26 @@ impl AnyImpl for chrono::DateTime<chrono::Utc> {
 
 impl FromAnyRow for chrono::DateTime<chrono::Utc> {
     fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-        let s: String = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
-        crate::temporal::parse_datetime_utc(&s).map_err(|e| Error::Decode(Box::new(e)))
+        let mut index = 0;
+        Self::from_any_row_at(row, &mut index)
     }
 
     fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
-        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
-        *index += 1;
-        crate::temporal::parse_datetime_utc(&s).map_err(|e| Error::Decode(Box::new(e)))
+        let res = row.try_get::<String, _>(*index);
+        match res {
+            Ok(s) => {
+                *index += 1;
+                crate::temporal::parse_datetime_utc(&s).map_err(|e| Error::Decode(Box::new(e)))
+            }
+            Err(e) => {
+                // Try numeric fallback
+                if let Ok(i) = row.try_get::<i64, _>(*index) {
+                    *index += 1;
+                    return Ok(chrono::DateTime::from_timestamp(i, 0).unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(chrono::NaiveDateTime::default(), chrono::Utc)));
+                }
+                Err(Error::Decode(Box::new(e)))
+            }
+        }
     }
 }
 
