@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PostgreSQL Tuple Decoding**: Fixed a critical `ColumnDecode` error in PostgreSQL when using `scalar()` with tuples (e.g., `(String, DateTime<Utc>)`). The `select_args_sql` now correctly casts temporal types to JSON/Text even when the result type is a tuple or primitive.
 - **Tuple/Primitive Index Consistency**: Standardized `FromAnyRow` implementations to use a common `from_any_row_at` pattern with an explicit index, ensuring reliable decoding for joined tables and multi-column results.
 
+### Changed
+- **Comprehensive API Documentation**: Significantly expanded the documentation across the core library, ensuring all public functions in `Database`, `DatabaseBuilder`, `RawQuery`, and `QueryBuilder` have clear descriptions, parameter/return type details, and practical examples.
+- **Enhanced Example Style**: Standardized code examples in documentation to include `// SQL:` comments that illustrate the generated SQL query for each method, providing better visibility into the library's internal behavior.
+
 ## [0.5.1] - 2026-03-03
 
 ### Added

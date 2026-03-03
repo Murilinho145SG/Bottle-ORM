@@ -328,8 +328,44 @@ pub struct DatabaseBuilder {
 }
 
 impl DatabaseBuilder {
+    /// Creates a new DatabaseBuilder with default settings.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let builder = DatabaseBuilder::new();
+    /// ```
     pub fn new() -> Self { Self { max_connections: 5 } }
+
+    /// Sets the maximum number of connections for the database pool.
+    ///
+    /// # Arguments
+    ///
+    /// * `max` - The maximum number of connections.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let db = Database::builder()
+    ///     .max_connections(10)
+    ///     .connect("sqlite::memory:")
+    ///     .await?;
+    /// ```
     pub fn max_connections(mut self, max: u32) -> Self { self.max_connections = max; self }
+
+    /// Connects to the database using the configured settings.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The database connection string.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let db = Database::builder()
+    ///     .connect("sqlite::memory:")
+    ///     .await?;
+    /// ```
     pub async fn connect(self, url: &str) -> Result<Database, Error> {
         // Ensure sqlx drivers are registered for Any driver support
         let _ = sqlx::any::install_default_drivers();
@@ -382,22 +418,91 @@ impl<'a, C> RawQuery<'a, C> where C: Connection {
     pub(crate) fn new(conn: C, sql: &'a str) -> Self {
         Self { conn, sql, args: AnyArguments::default() }
     }
+
+    /// Binds a value to the SQL query.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type of the value to bind.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let user: User = db.raw("SELECT * FROM users WHERE id = ?")
+    ///     .bind(1)
+    ///     .fetch_one()
+    ///     .await?;
+    /// ```
     pub fn bind<T>(mut self, value: T) -> Self where T: 'a + sqlx::Encode<'a, sqlx::Any> + sqlx::Type<sqlx::Any> + Send + Sync {
         let _ = self.args.add(value);
         self
     }
+
+    /// Executes the query and returns all matching rows.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type to map the rows to.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let users: Vec<User> = db.raw("SELECT * FROM users")
+    ///     .fetch_all()
+    ///     .await?;
+    /// ```
     pub async fn fetch_all<T>(self) -> Result<Vec<T>, Error> where T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin {
         let rows = self.conn.fetch_all(self.sql, self.args).await?;
         Ok(rows.iter().map(|r| T::from_row(r).unwrap()).collect())
     }
+
+    /// Executes the query and returns exactly one row.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type to map the row to.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let user: User = db.raw("SELECT * FROM users WHERE id = 1")
+    ///     .fetch_one()
+    ///     .await?;
+    /// ```
     pub async fn fetch_one<T>(self) -> Result<T, Error> where T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin {
         let row = self.conn.fetch_one(self.sql, self.args).await?;
         Ok(T::from_row(&row)?)
     }
+
+    /// Executes the query and returns an optional row.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type to map the row to.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let user: Option<User> = db.raw("SELECT * FROM users WHERE id = 1")
+    ///     .fetch_optional()
+    ///     .await?;
+    /// ```
     pub async fn fetch_optional<T>(self) -> Result<Option<T>, Error> where T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin {
         let row = self.conn.fetch_optional(self.sql, self.args).await?;
         Ok(row.map(|r| T::from_row(&r).unwrap()))
     }
+
+    /// Executes the query and returns the number of affected rows.
+    ///
+    /// Useful for UPDATE, DELETE or INSERT queries.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let affected = db.raw("DELETE FROM users WHERE id = 1")
+    ///     .execute()
+    ///     .await?;
+    /// ```
     pub async fn execute(self) -> Result<u64, Error> {
         let result = self.conn.execute(self.sql, self.args).await?;
         Ok(result.rows_affected())

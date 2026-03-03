@@ -420,11 +420,19 @@ where
 
     /// Truncates the table associated with this Model.
     ///
-    /// Uses TRUNCATE TABLE for Postgres/MySQL and DELETE FROM for SQLite.
+    /// This method removes all records from the table. It uses `TRUNCATE TABLE`
+    /// for Postgres and MySQL, and `DELETE FROM` with sequence reset for SQLite.
     ///
     /// # Returns
-    /// * `Ok(())` on success
-    /// * `Err(sqlx::Error)` on database failure
+    ///
+    /// * `Ok(())` - Table truncated successfully
+    /// * `Err(sqlx::Error)` - Database error occurred
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.model::<Log>().truncate().await?;
+    /// ```
     pub async fn truncate(self) -> Result<(), sqlx::Error> {
         let table_name = self.table_name.to_snake_case();
         let query = match self.driver {
@@ -447,11 +455,41 @@ where
     }
 
     /// Combines the results of this query with another query using UNION.
+    ///
+    /// This method allows you to combine the result sets of two queries into a single
+    /// result set. Duplicate rows are removed by default.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Another QueryBuilder instance to combine with.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let q1 = db.model::<User>().filter("age", ">", 18);
+    /// let q2 = db.model::<User>().filter("status", "=", "premium");
+    /// let results = q1.union(q2).scan().await?;
+    /// ```
     pub fn union(self, other: QueryBuilder<T, E>) -> Self where T: AnyImpl + 'static, E: 'static {
         self.union_internal("UNION", other)
     }
 
     /// Combines the results of this query with another query using UNION ALL.
+    ///
+    /// This method allows you to combine the result sets of two queries into a single
+    /// result set, including all duplicates.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Another QueryBuilder instance to combine with.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let q1 = db.model::<User>().filter("age", ">", 18);
+    /// let q2 = db.model::<User>().filter("status", "=", "premium");
+    /// let results = q1.union_all(q2).scan().await?;
+    /// ```
     pub fn union_all(self, other: QueryBuilder<T, E>) -> Self where T: AnyImpl + 'static, E: 'static {
         self.union_internal("UNION ALL", other)
     }
@@ -576,6 +614,7 @@ where
     ///
     /// ```rust,ignore
     /// query.filter("age", Op::Gte, 18)
+    /// // SQL: AND "age" >= 18
     /// ```
     pub fn filter<V>(self, col: &'static str, op: Op, value: V) -> Self
     where
@@ -586,10 +625,17 @@ where
 
     /// Adds an OR WHERE clause to the query.
     ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to filter on
+    /// * `op` - The comparison operator
+    /// * `value` - The value to compare against
+    ///
     /// # Example
     ///
     /// ```rust,ignore
     /// query.filter("age", Op::Lt, 18).or_filter("active", Op::Eq, false)
+    /// // SQL: AND "age" < 18 OR "active" = false
     /// ```
     pub fn or_filter<V>(self, col: &'static str, op: Op, value: V) -> Self
     where
@@ -599,6 +645,19 @@ where
     }
 
     /// Adds an AND NOT WHERE clause to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to filter on
+    /// * `op` - The comparison operator
+    /// * `value` - The value to compare against
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// query.not_filter("status", Op::Eq, "banned")
+    /// // SQL: AND NOT "status" = 'banned'
+    /// ```
     pub fn not_filter<V>(self, col: &'static str, op: Op, value: V) -> Self
     where
         V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
@@ -607,6 +666,19 @@ where
     }
 
     /// Adds an OR NOT WHERE clause to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name to filter on
+    /// * `op` - The comparison operator
+    /// * `value` - The value to compare against
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// query.filter("age", Op::Gt, 18).or_not_filter("status", Op::Eq, "inactive")
+    /// // SQL: AND "age" > 18 OR NOT "status" = 'inactive'
+    /// ```
     pub fn or_not_filter<V>(self, col: &'static str, op: Op, value: V) -> Self
     where
         V: 'static + for<'q> Encode<'q, Any> + Type<Any> + Send + Sync + Clone,
@@ -662,10 +734,17 @@ where
 
     /// Adds an OR BETWEEN clause to the query.
     ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name
+    /// * `start` - The start value of the range
+    /// * `end` - The end value of the range
+    ///
     /// # Example
     ///
     /// ```rust,ignore
     /// query.between("age", 18, 30).or_between("salary", 5000, 10000)
+    /// // SQL: AND "age" BETWEEN 18 AND 30 OR "salary" BETWEEN 5000 AND 10000
     /// ```
     pub fn or_between<V>(mut self, col: &'static str, start: V, end: V) -> Self
     where
@@ -700,6 +779,11 @@ where
     }
 
     /// Adds an IN list clause to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The column name
+    /// * `values` - A vector of values
     ///
     /// # Example
     ///
@@ -798,6 +882,23 @@ where
     }
 
     /// Groups filters inside parentheses with an AND operator.
+    ///
+    /// This allows for constructing complex WHERE clauses with nested logic.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - A closure that receives a `QueryBuilder` and returns it with more filters
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.model::<User>()
+    ///     .filter("active", Op::Eq, true)
+    ///     .group(|q| q.filter("age", Op::Gt, 18).or_filter("role", Op::Eq, "admin"))
+    ///     .scan()
+    ///     .await?;
+    /// // SQL: AND "active" = true AND (1=1 AND ("age" > 18 OR "role" = 'admin'))
+    /// ```
     pub fn group<F>(mut self, f: F) -> Self
     where
         F: FnOnce(Self) -> Self,
@@ -821,6 +922,21 @@ where
     }
 
     /// Groups filters inside parentheses with an OR operator.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - A closure that receives a `QueryBuilder` and returns it with more filters
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.model::<User>()
+    ///     .filter("active", Op::Eq, true)
+    ///     .or_group(|q| q.filter("role", Op::Eq, "admin").filter("age", Op::Gt, 18))
+    ///     .scan()
+    ///     .await?;
+    /// // SQL: AND "active" = true OR (1=1 AND ("role" = 'admin' AND "age" > 18))
+    /// ```
     pub fn or_group<F>(mut self, f: F) -> Self
     where
         F: FnOnce(Self) -> Self,
@@ -861,6 +977,7 @@ where
     ///     .where_raw("age >= ?", 18)
     ///     .scan()
     ///     .await?;
+    /// // SQL: AND name = 'Alice' AND age >= 18
     /// ```
     pub fn where_raw<V>(mut self, sql: &str, value: V) -> Self
     where
@@ -1129,27 +1246,21 @@ where
         self
     }
 
-    /// Placeholder for JOIN operations.
-    ///
-    /// This method is reserved for future implementation of SQL JOINs.
-    /// Currently, it returns `self` unchanged to maintain the fluent interface.
-    ///
-    /// # Future Implementation
-    ///
-    /// Will support various types of JOINs (INNER, LEFT, RIGHT, FULL):
-    ///
-    /// ```rust,ignore
-    /// Adds a JOIN clause to the query.
+    /// Adds an INNER JOIN clause to the query.
     ///
     /// # Arguments
     ///
-    /// * `table` - The name of the table to join.
-    /// * `s_query` - The ON clause condition (e.g., "users.id = posts.user_id").
+    /// * `table` - The name of the table to join (with optional alias)
+    /// * `on` - The join condition (e.g., "users.id = posts.user_id")
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// query.join("posts", "users.id = posts.user_id")
+    /// db.model::<User>()
+    ///     .join("posts p", "u.id = p.user_id")
+    ///     .scan()
+    ///     .await?;
+    /// // SQL: INNER JOIN "posts" p ON u.id = p.user_id
     /// ```
     pub fn join(self, table: &str, s_query: &str) -> Self {
         self.join_generic("", table, s_query)
@@ -1189,17 +1300,22 @@ where
         self
     }
 
-    /// Adds a raw JOIN clause with a placeholder and a bound value.
+    /// Adds a JOIN clause with a placeholder and a bound value.
     ///
-    /// This is useful for joining tables with conditions that involve external values.
+    /// # Arguments
+    ///
+    /// * `table` - The name of the table to join
+    /// * `on` - The join condition with a `?` placeholder
+    /// * `value` - The value to bind
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// db.model::<Permissions>()
-    ///     .join_raw("role_permissions rp", "rp.role_id = ?", role_id)
+    /// db.model::<User>()
+    ///     .join_raw("posts p", "p.user_id = u.id AND p.status = ?", "published")
     ///     .scan()
     ///     .await?;
+    /// // SQL: JOIN "posts" p ON p.user_id = u.id AND p.status = 'published'
     /// ```
     pub fn join_raw<V>(self, table: &str, on: &str, value: V) -> Self
     where
@@ -1307,9 +1423,6 @@ where
 
     /// Adds a LEFT JOIN clause.
     ///
-    /// Performs a LEFT JOIN with another table. Returns all records from the left table,
-    /// and the matched records from the right table (or NULL if no match).
-    ///
     /// # Arguments
     ///
     /// * `table` - The name of the table to join with
@@ -1320,18 +1433,16 @@ where
     /// ```rust,ignore
     /// // Get all users and their posts (if any)
     /// let users_with_posts = db.model::<User>()
-    ///     .left_join("posts", "users.id = posts.user_id")
+    ///     .left_join("posts p", "u.id = p.user_id")
     ///     .scan()
     ///     .await?;
+    /// // SQL: LEFT JOIN "posts" p ON u.id = p.user_id
     /// ```
     pub fn left_join(self, table: &str, on: &str) -> Self {
         self.join_generic("LEFT", table, on)
     }
 
     /// Adds a RIGHT JOIN clause.
-    ///
-    /// Performs a RIGHT JOIN with another table. Returns all records from the right table,
-    /// and the matched records from the left table (or NULL if no match).
     ///
     /// # Arguments
     ///
@@ -1341,19 +1452,17 @@ where
     /// # Example
     ///
     /// ```rust,ignore
-    /// let posts_with_users = db.model::<Post>()
-    ///     .right_join("users", "posts.user_id = users.id")
+    /// db.model::<Post>()
+    ///     .right_join("users u", "p.user_id = u.id")
     ///     .scan()
     ///     .await?;
+    /// // SQL: RIGHT JOIN "users" u ON p.user_id = u.id
     /// ```
     pub fn right_join(self, table: &str, on: &str) -> Self {
         self.join_generic("RIGHT", table, on)
     }
 
     /// Adds an INNER JOIN clause.
-    ///
-    /// Performs an INNER JOIN with another table. Returns records that have matching
-    /// values in both tables.
     ///
     /// # Arguments
     ///
@@ -1365,18 +1474,16 @@ where
     /// ```rust,ignore
     /// // Get only users who have posts
     /// let active_users = db.model::<User>()
-    ///     .inner_join("posts", "users.id = posts.user_id")
+    ///     .inner_join("posts p", "u.id = p.user_id")
     ///     .scan()
     ///     .await?;
+    /// // SQL: INNER JOIN "posts" p ON u.id = p.user_id
     /// ```
     pub fn inner_join(self, table: &str, on: &str) -> Self {
         self.join_generic("INNER", table, on)
     }
 
     /// Adds a FULL JOIN clause.
-    ///
-    /// Performs a FULL OUTER JOIN. Returns all records when there is a match in
-    /// either left or right table.
     ///
     /// # Arguments
     ///
@@ -1386,7 +1493,8 @@ where
     /// # Example
     ///
     /// ```rust,ignore
-    /// query.full_join("profiles", "profiles.user_id = users.id")
+    /// query.full_join("profiles pr", "u.id = pr.user_id")
+    /// // SQL: FULL JOIN "profiles" pr ON u.id = pr.user_id
     /// ```
     pub fn full_join(self, table: &str, on: &str) -> Self {
         self.join_generic("FULL", table, on)
@@ -2372,7 +2480,7 @@ where
     ///
     /// # Type Parameters
     ///
-    /// * `R` - The result type. Must implement `FromRow` for deserialization from database rows.
+    /// * `R` - The result type. Must implement `FromAnyRow` and `AnyImpl`.
     ///
     /// # Returns
     ///
@@ -2382,26 +2490,11 @@ where
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Get all adult users, ordered by age, limited to 10
     /// let users: Vec<User> = db.model::<User>()
-    ///     .filter("age", ">=", 18)
-    ///     .order("age DESC")
-    ///     .limit(10)
+    ///     .filter("age", Op::Gte, 18)
     ///     .scan()
     ///     .await?;
-    ///
-    /// // Get users by UUID
-    /// let user_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")?;
-    /// let users: Vec<User> = db.model::<User>()
-    ///     .filter("id", "=", user_id)
-    ///     .scan()
-    ///     .await?;
-    ///
-    /// // Empty result is Ok
-    /// let results: Vec<User> = db.model::<User>()
-    ///     .filter("age", ">", 200)
-    ///     .scan()
-    ///     .await?;  // Returns empty Vec, not an error
+    /// // SQL: SELECT * FROM "user" WHERE "age" >= 18
     /// ```
     pub async fn scan<R>(mut self) -> Result<Vec<R>, sqlx::Error>
     where
@@ -2427,6 +2520,27 @@ where
     }
 
     /// Executes the query and maps the result to a custom DTO.
+    ///
+    /// Useful for queries that return only a subset of columns or join multiple tables.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `R` - The DTO type. Must implement `FromAnyRow` and `AnyImpl`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<R>)` - Vector of results
+    /// * `Err(sqlx::Error)` - Database error
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let dtos: Vec<UserStats> = db.model::<User>()
+    ///     .select("username, age")
+    ///     .scan_as::<UserStats>()
+    ///     .await?;
+    /// // SQL: SELECT "username", "age" FROM "user"
+    /// ```
     pub async fn scan_as<R>(mut self) -> Result<Vec<R>, sqlx::Error>
     where
         R: FromAnyRow + AnyImpl + Send + Unpin,
@@ -2451,6 +2565,27 @@ where
     }
 
     /// Executes the query and returns only the first result.
+    ///
+    /// Automatically applies `LIMIT 1` if no limit is set.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `R` - The result type. Must implement `FromAnyRow` and `AnyImpl`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(R)` - The first matching record
+    /// * `Err(sqlx::Error::RowNotFound)` - If no records match
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let user: User = db.model::<User>()
+    ///     .filter("id", Op::Eq, 1)
+    ///     .first()
+    ///     .await?;
+    /// // SQL: SELECT * FROM "user" WHERE "id" = 1 LIMIT 1
+    /// ```
     pub async fn first<R>(mut self) -> Result<R, sqlx::Error>
     where
         R: FromAnyRow + AnyImpl + Send + Unpin,
@@ -2490,6 +2625,30 @@ where
     }
 
     /// Executes the query and returns a single scalar value.
+    ///
+    /// This method is useful for fetching single values like counts, max/min values,
+    /// or specific columns without mapping to a struct or tuple.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `O` - The output type. Must implement `FromAnyRow`, `AnyImpl`, `Send` and `Unpin`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Get count of users
+    /// let count: i64 = db.model::<User>()
+    ///     .select("count(*)")
+    ///     .scalar()
+    ///     .await?;
+    ///
+    /// // Get specific field
+    /// let username: String = db.model::<User>()
+    ///     .filter("id", "=", 1)
+    ///     .select("username")
+    ///     .scalar()
+    ///     .await?;
+    /// ```
     pub async fn scalar<O>(mut self) -> Result<O, sqlx::Error>
     where
         O: FromAnyRow + AnyImpl + Send + Unpin,
@@ -2760,16 +2919,24 @@ where
 
     /// Executes a DELETE query based on the current filters.
     ///
-    /// If the model has a `#[orm(soft_delete)]` column, this method performs
-    /// an UPDATE setting the soft delete column to the current timestamp instead
-    /// of physically deleting the record.
-    ///
-    /// For permanent deletion, use `hard_delete()`.
+    /// Performs a soft delete if the model has a soft delete column,
+    /// otherwise performs a permanent hard delete.
     ///
     /// # Returns
     ///
     /// * `Ok(u64)` - The number of rows deleted (or soft-deleted)
     /// * `Err(sqlx::Error)` - Database error
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// db.model::<User>()
+    ///     .filter("id", Op::Eq, 1)
+    ///     .delete()
+    ///     .await?;
+    /// // SQL (Soft): UPDATE "user" SET "deleted_at" = NOW() WHERE "id" = 1
+    /// // SQL (Hard): DELETE FROM "user" WHERE "id" = 1
+    /// ```
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
         // Check for soft delete column
         let soft_delete_col = self.columns_info.iter().find(|c| c.soft_delete).map(|c| c.name);
@@ -2831,9 +2998,6 @@ where
 
     /// Permanently removes records from the database.
     ///
-    /// This method performs a physical DELETE, bypassing any soft delete logic.
-    /// Use this when you need to permanently remove records.
-    ///
     /// # Returns
     ///
     /// * `Ok(u64)` - The number of rows deleted
@@ -2842,12 +3006,11 @@ where
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Permanently delete soft-deleted records older than 30 days
     /// db.model::<User>()
-    ///     .with_deleted()
-    ///     .filter("deleted_at", "<", thirty_days_ago)
+    ///     .filter("id", Op::Eq, 1)
     ///     .hard_delete()
     ///     .await?;
+    /// // SQL: DELETE FROM "user" WHERE "id" = 1
     /// ```
     pub async fn hard_delete(self) -> Result<u64, sqlx::Error> {
         let mut query = String::from("DELETE FROM \"");
