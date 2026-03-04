@@ -215,6 +215,7 @@ dependencies = [
  "heck",
  "log",
  "serde",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tokio",

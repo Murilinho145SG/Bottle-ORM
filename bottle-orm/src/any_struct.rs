@@ -1,5 +1,6 @@
 use sqlx::{any::AnyRow, Error, Row};
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
 // ============================================================================
 // AnyInfo Structure
@@ -108,6 +109,68 @@ macro_rules! impl_cast_primitive {
 
 // Primitives that might need casting from i64
 impl_cast_primitive!(i8, isize, u8, u16, u32, u64, usize);
+
+// ============================================================================
+// Array and JSON Implementations
+// ============================================================================
+
+impl<T> AnyImpl for Vec<T>
+where
+    T: AnyImpl + Serialize + for<'de> Deserialize<'de>,
+{
+    fn columns() -> Vec<AnyInfo> {
+        Vec::new()
+    }
+    fn to_map(&self) -> HashMap<String, Option<String>> {
+        let mut map = HashMap::new();
+        if let Ok(json) = serde_json::to_string(self) {
+            map.insert("".to_string(), Some(json));
+        }
+        map
+    }
+}
+
+impl<T> FromAnyRow for Vec<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Send,
+{
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        let mut index = 0;
+        Self::from_any_row_at(row, &mut index)
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        // sqlx::Any typically returns complex types like Arrays and JSON as strings
+        // especially when we use our Postgres to_json/casting logic or in SQLite.
+        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+        *index += 1;
+        serde_json::from_str(&s).map_err(|e| Error::Decode(Box::new(e)))
+    }
+}
+
+impl AnyImpl for serde_json::Value {
+    fn columns() -> Vec<AnyInfo> {
+        Vec::new()
+    }
+    fn to_map(&self) -> HashMap<String, Option<String>> {
+        let mut map = HashMap::new();
+        map.insert("".to_string(), Some(self.to_string()));
+        map
+    }
+}
+
+impl FromAnyRow for serde_json::Value {
+    fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
+        let mut index = 0;
+        Self::from_any_row_at(row, &mut index)
+    }
+
+    fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
+        let s: String = row.try_get(*index).map_err(|e| Error::Decode(Box::new(e)))?;
+        *index += 1;
+        serde_json::from_str(&s).map_err(|e| Error::Decode(Box::new(e)))
+    }
+}
 
 // ============================================================================
 // External Type Implementations

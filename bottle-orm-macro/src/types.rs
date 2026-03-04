@@ -125,6 +125,16 @@ pub fn rust_type_to_sql(ty: &Type) -> (String, bool) {
                         return (inner_sql_type, true);
                     }
 
+            // ========================================================================
+            // Handle Vec<T> for SQL Arrays
+            // ================================================================
+            if type_name == "Vec"
+                && let PathArguments::AngleBracketed(args) = &segment.arguments
+                    && let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+                        let (inner_sql_type, _) = rust_type_to_sql(inner_ty);
+                        return (format!("{}[]", inner_sql_type), false);
+                    }
+
             // ================================================================
             // Map non-nullable types to their SQL equivalents
             // ================================================================

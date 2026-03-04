@@ -208,6 +208,23 @@ impl ValueBinder for AnyArguments<'_> {
             }
 
             // ================================================================
+            // Array Types (e.g., TEXT[], INTEGER[])
+            // ================================================================
+            s if s.ends_with("[]") => {
+                match driver {
+                    Drivers::Postgres => {
+                        // For PostgreSQL, we rely on string representation + cast in query builder
+                        self.bind_string(value_str.to_string());
+                    }
+                    _ => {
+                        // MySQL and SQLite don't have native arrays, stored as JSON/Text
+                        self.bind_string(value_str.to_string());
+                    }
+                }
+                Ok(())
+            }
+
+            // ================================================================
             // Text and Default Types
             // ================================================================
             "TEXT" | "VARCHAR" | "CHAR" | "STRING" | _ => {
