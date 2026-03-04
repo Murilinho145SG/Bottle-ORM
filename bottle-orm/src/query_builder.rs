@@ -565,7 +565,7 @@ where
         query.push_str(&self.table_name.to_snake_case());
         query.push_str("\" ");
         if let Some(alias) = &self.alias {
-            query.push_str(&format!("{} ", alias));
+            query.push_str(&format!("\"{}\" ", alias));
         }
 
         if !self.joins_clauses.is_empty() {
@@ -1330,7 +1330,7 @@ where
 
         self.joins_clauses.push(Box::new(move |query, _args, _driver, _arg_counter| {
             if let Some((table_name, alias)) = table_owned.split_once(" ") {
-                query.push_str(&format!("{} JOIN \"{}\" {} ON {}", join_type_owned, table_name, alias, parsed_query));
+                query.push_str(&format!("{} JOIN \"{}\" \"{}\" ON {}", join_type_owned, table_name, alias, parsed_query));
             } else {
                 query.push_str(&format!("{} JOIN \"{}\" ON {}", join_type_owned, table_owned, parsed_query));
             }
@@ -1667,7 +1667,13 @@ where
     where
         N: FromAnyRow + AnyImpl + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
-        self.select_columns = vec![format!("SUM({})", column)];
+        let quoted_col = if column.contains('.') {
+            let parts: Vec<&str> = column.split('.').collect();
+            format!("\"{}\".\"{}\"", parts[0].trim_matches('"'), parts[1].trim_matches('"'))
+        } else {
+            format!("\"{}\"", column.trim_matches('"'))
+        };
+        self.select_columns = vec![format!("SUM({})", quoted_col)];
         self.scalar::<N>().await
     }
 
@@ -1688,7 +1694,13 @@ where
     where
         N: FromAnyRow + AnyImpl + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
-        self.select_columns = vec![format!("AVG({})", column)];
+        let quoted_col = if column.contains('.') {
+            let parts: Vec<&str> = column.split('.').collect();
+            format!("\"{}\".\"{}\"", parts[0].trim_matches('"'), parts[1].trim_matches('"'))
+        } else {
+            format!("\"{}\"", column.trim_matches('"'))
+        };
+        self.select_columns = vec![format!("AVG({})", quoted_col)];
         self.scalar::<N>().await
     }
 
@@ -1709,7 +1721,13 @@ where
     where
         N: FromAnyRow + AnyImpl + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
-        self.select_columns = vec![format!("MIN({})", column)];
+        let quoted_col = if column.contains('.') {
+            let parts: Vec<&str> = column.split('.').collect();
+            format!("\"{}\".\"{}\"", parts[0].trim_matches('"'), parts[1].trim_matches('"'))
+        } else {
+            format!("\"{}\"", column.trim_matches('"'))
+        };
+        self.select_columns = vec![format!("MIN({})", quoted_col)];
         self.scalar::<N>().await
     }
 
@@ -1730,7 +1748,13 @@ where
     where
         N: FromAnyRow + AnyImpl + for<'r> Decode<'r, Any> + Type<Any> + Send + Unpin,
     {
-        self.select_columns = vec![format!("MAX({})", column)];
+        let quoted_col = if column.contains('.') {
+            let parts: Vec<&str> = column.split('.').collect();
+            format!("\"{}\".\"{}\"", parts[0].trim_matches('"'), parts[1].trim_matches('"'))
+        } else {
+            format!("\"{}\"", column.trim_matches('"'))
+        };
+        self.select_columns = vec![format!("MAX({})", quoted_col)];
         self.scalar::<N>().await
     }
 
@@ -2263,10 +2287,15 @@ where
                             let k_clean = k.strip_prefix("r#").unwrap_or(*k);
                             k_clean == *col || k_clean.to_snake_case() == col_snake
                         }) {
-                            let sql_type = columns_info.iter().find(|c| {
+                            let sql_type_opt = columns_info.iter().find(|c| {
                                 let c_clean = c.name.strip_prefix("r#").unwrap_or(c.name);
                                 c_clean == *col || c_clean.to_snake_case() == col_snake
-                            }).map(|c| c.sql_type).unwrap_or("TEXT");
+                            }).map(|c| c.sql_type);
+                            
+                            let sql_type = match sql_type_opt {
+                                Some(t) => t,
+                                None => continue,
+                            };
                             
                             let placeholder = match self.driver {
                                 Drivers::Postgres => {
@@ -2897,12 +2926,16 @@ where
                 let col_name_clean = col_name.strip_prefix("r#").unwrap_or(&col_name).to_snake_case();
 
                 // Find the SQL type for this column from the Model metadata
-                let sql_type = self
+                let sql_type_opt = self
                     .columns_info
                     .iter()
                     .find(|c| c.name == col_name || c.name == col_name_clean)
-                    .map(|c| c.sql_type)
-                    .unwrap_or("TEXT");
+                    .map(|c| c.sql_type);
+                    
+                let sql_type = match sql_type_opt {
+                    Some(t) => t,
+                    None => continue,
+                };
 
                 // Generate placeholder
                 let placeholder = match self.driver {

@@ -450,7 +450,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
 
         impl bottle_orm::Model for #struct_name {
             fn table_name() -> &'static str {
-                stringify!(#struct_name)
+                #table_name_str
             }
 
             fn columns() -> Vec<bottle_orm::ColumnInfo> {
