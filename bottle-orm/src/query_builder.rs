@@ -2029,6 +2029,7 @@ where
                             match *sql_type {
                                 "UUID" => format!("${}::UUID", idx),
                                 "JSONB" | "jsonb" => format!("${}::JSONB", idx),
+                                s if s.ends_with("[]") => format!("${}::{}", idx, s),
                                 _ => format!("${}", idx),
                             }
                         }
@@ -2949,6 +2950,7 @@ where
                             match sql_type {
                                 "UUID" => format!("${}::UUID", idx),
                                 "JSONB" | "jsonb" => format!("${}::JSONB", idx),
+                                s if s.ends_with("[]") => format!("${}::{}", idx, s),
                                 _ => format!("${}", idx),
                             }
                         }

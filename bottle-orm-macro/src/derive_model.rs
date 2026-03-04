@@ -182,22 +182,39 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let field_name = &f.ident;
         let field_type = &f.ty;
 
-        let (_, is_nullable) = rust_type_to_sql(field_type);
+        let (sql_type, is_nullable) = rust_type_to_sql(field_type);
+        let is_complex = sql_type.ends_with("[]") || sql_type == "JSONB" || sql_type == "JSON";
 
         if is_nullable {
             return quote! {
                 map.insert(
                     stringify!(#field_name).to_string(),
-                    self.#field_name.as_ref().map(|v| v.to_string())
+                    self.#field_name.as_ref().map(|v| {
+                        // For complex types, use JSON serialization for to_map
+                        if #is_complex {
+                            serde_json::to_string(v).unwrap_or_else(|_| "".to_string())
+                        } else {
+                            v.to_string()
+                        }
+                    })
                 );
             };
         }
 
-        quote! {
-            map.insert(
-                stringify!(#field_name).to_string(),
-                 Some(self.#field_name.to_string())
-            );
+        if is_complex {
+            quote! {
+                map.insert(
+                    stringify!(#field_name).to_string(),
+                    Some(serde_json::to_string(&self.#field_name).unwrap_or_else(|_| "".to_string()))
+                );
+            }
+        } else {
+            quote! {
+                map.insert(
+                    stringify!(#field_name).to_string(),
+                     Some(self.#field_name.to_string())
+                );
+            }
         }
     });
 
@@ -304,6 +321,23 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                     };
                  }
              }
+        } else if sql_type.ends_with("[]") || sql_type == "JSONB" || sql_type == "JSON" {
+            quote! {
+                let #field_name: #field_type = {
+                    let mut index = 0;
+                    match row.try_column(#alias_name) {
+                        Ok(col) => {
+                            index = sqlx::Column::ordinal(col);
+                            bottle_orm::any_struct::FromAnyRow::from_any_row_at(row, &mut index)?
+                        }
+                        Err(_) => {
+                            let col = row.try_column(#column_name)?;
+                            index = sqlx::Column::ordinal(col);
+                            bottle_orm::any_struct::FromAnyRow::from_any_row_at(row, &mut index)?
+                        }
+                    }
+                };
+            }
         } else {
             quote! {
                 let #field_name: #field_type = row.try_get(#alias_name).or_else(|_| row.try_get(#column_name))?;
@@ -404,9 +438,9 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                 }
             }
         } else {
+            // Use FromAnyRow::from_any_row_at for all other types (includes primitives, JSON, Arrays, etc.)
             quote! {
-                let #field_name: #field_type = row.try_get(*index)?;
-                *index += 1;
+                let #field_name: #field_type = bottle_orm::any_struct::FromAnyRow::from_any_row_at(row, index)?;
             }
         }
     });
@@ -481,6 +515,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         impl<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> for #struct_name {
              fn from_row(row: &'r sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
                  use sqlx::Row;
+                 use sqlx::Column;
                  #(#from_row_logic)*
 
                  Ok(#struct_name {
@@ -491,6 +526,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
 
         impl bottle_orm::any_struct::FromAnyRow for #struct_name {
              fn from_any_row(row: &sqlx::any::AnyRow) -> Result<Self, sqlx::Error> {
+                 use bottle_orm::any_struct::FromAnyRow;
                  use sqlx::Row;
                  #(#from_row_logic_clone)*
 
@@ -500,6 +536,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
              }
 
              fn from_any_row_at(row: &sqlx::any::AnyRow, index: &mut usize) -> Result<Self, sqlx::Error> {
+                 use bottle_orm::any_struct::FromAnyRow;
                  use sqlx::Row;
                  #(#from_row_logic_positional)*
 

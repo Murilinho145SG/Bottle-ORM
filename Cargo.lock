@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "bottle-orm"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -215,6 +215,7 @@ dependencies = [
  "heck",
  "log",
  "serde",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tokio",
@@ -223,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "bottle-orm-macro"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "heck",
  "proc-macro2",
