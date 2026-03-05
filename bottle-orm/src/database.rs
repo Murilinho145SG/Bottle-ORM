@@ -383,6 +383,7 @@ impl DatabaseBuilder {
 // ============================================================================
 
 pub trait Connection: Send + Sync {
+    fn driver(&self) -> Drivers;
     fn execute<'a, 'q: 'a>(&'a self, sql: &'q str, args: AnyArguments<'q>) -> BoxFuture<'a, Result<sqlx::any::AnyQueryResult, sqlx::Error>>;
     fn fetch_all<'a, 'q: 'a>(&'a self, sql: &'q str, args: AnyArguments<'q>) -> BoxFuture<'a, Result<Vec<sqlx::any::AnyRow>, sqlx::Error>>;
     fn fetch_one<'a, 'q: 'a>(&'a self, sql: &'q str, args: AnyArguments<'q>) -> BoxFuture<'a, Result<sqlx::any::AnyRow, sqlx::Error>>;
@@ -390,6 +391,7 @@ pub trait Connection: Send + Sync {
 }
 
 impl Connection for Database {
+    fn driver(&self) -> Drivers { self.driver }
     fn execute<'a, 'q: 'a>(&'a self, sql: &'q str, args: AnyArguments<'q>) -> BoxFuture<'a, Result<sqlx::any::AnyQueryResult, sqlx::Error>> {
         Box::pin(async move { sqlx::query_with(sql, args).execute(&self.pool).await })
     }

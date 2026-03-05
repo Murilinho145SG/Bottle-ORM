@@ -78,6 +78,24 @@
 // ============================================================================
 
 use std::collections::HashMap;
+use futures::future::BoxFuture;
+use crate::database::Connection;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationType {
+    HasOne,
+    HasMany,
+    BelongsTo,
+}
+
+#[derive(Debug, Clone)]
+pub struct RelationInfo {
+    pub name: &'static str,
+    pub rel_type: RelationType,
+    pub target_table: &'static str,
+    pub foreign_key: &'static str,
+    pub local_key: &'static str,
+}
 
 // ============================================================================
 // Column Metadata Structure
@@ -521,7 +539,39 @@ pub trait Model {
     /// ```
     fn active_columns() -> Vec<&'static str>;
 
-    /// Converts the model instance into a value map (Column Name → String Value).
+    /// Returns the list of relations for this model.
+    ///
+    /// This method provides metadata about the relationships defined in the model.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `RelationInfo` structs describing each relation
+    fn relations() -> Vec<RelationInfo> {
+        Vec::new()
+    }
+
+    /// Loads a specific relation for a collection of models.
+    ///
+    /// This method is used by the Query Builder to implement eager loading (with).
+    /// It should fetch the related records and inject them into the models.
+    ///
+    /// # Arguments
+    ///
+    /// * `relation_name` - The name of the relation to load
+    /// * `models` - A mutable slice of model instances
+    /// * `tx` - The database connection
+    fn load_relations<'a>(
+        _relation_name: &'a str,
+        _models: &'a mut [Self],
+        _tx: &'a dyn Connection,
+    ) -> BoxFuture<'a, Result<(), sqlx::Error>>
+    where
+        Self: Sized,
+    {
+        Box::pin(async move { Ok(()) })
+    }
+
+    /// Converts the model instance into a value map (Column Name â†’ String Value).
     ///
     /// This method serializes the model instance into a HashMap where keys are
     /// column names and values are string representations. It's used primarily

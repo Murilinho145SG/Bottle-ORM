@@ -44,6 +44,7 @@ pub struct Transaction<'a> {
 // ============================================================================
 
 impl Connection for Transaction<'_> {
+    fn driver(&self) -> Drivers { self.driver }
     fn execute<'a, 'q: 'a>(&'a self, sql: &'q str, args: AnyArguments<'q>) -> BoxFuture<'a, Result<sqlx::any::AnyQueryResult, sqlx::Error>> {
         Box::pin(async move {
             let mut guard = self.tx.lock().await;

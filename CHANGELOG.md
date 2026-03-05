@@ -7,12 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.6] - 2026-03-05
 
+### Fixed
+- **Doctest Type Bounds**: Standardized string literal handling in documentation examples using `.to_string()` to satisfy `sqlx::Any` trait bounds, preventing compilation errors in examples.
+
 ### Added
 - **Compilable Documentation Tests**: Fixed multiple `QueryBuilder` doctests by removing `ignore` and adding necessary setup. This ensures examples for `new`, `filter`, `or_filter`, `not_filter`, `or_not_filter`, `between`, `or_between`, `in_list`, and `or_in_list` are verified during `cargo test`.
 - **Improved QueryBuilder Documentation**: Significantly expanded documentation for `or_in_list`, `or_where_raw`, `left_join_raw`, `right_join_raw`, `inner_join_raw`, `full_join_raw`, `update`, `updates`, and `update_partial` with detailed argument descriptions and practical examples.
+- **Eager Loading**: Introduced `.with()` method in `QueryBuilder` for optimized relationship loading.
+- **Relationship Attributes**: Added `#[orm(has_many = "...")]`, `#[orm(has_one = "...")]`, and `#[orm(belongs_to = "...")]` to `derive(Model)`.
+- **Batch Loading**: Implemented efficient relationship fetching using `IN` clauses to solve the N+1 query problem.
+- **QueryBuilder Improvements**: Added `scan_with()` to execute queries with eager loading.
+- **Connection Trait**: Added `driver()` method to the `Connection` trait for driver-aware manual SQL execution.
 
-### Fixed
-- **Doctest Type Bounds**: Standardized string literal handling in documentation examples using `.to_string()` to satisfy `sqlx::Any` trait bounds, preventing compilation errors in examples.
+### Changed
+- **Model Trait**: Updated `Model` trait with `relations()` and `load_relations()` methods (with default implementations for compatibility).
+- **Macro Generation**: Enhanced `derive(Model)` to automatically generate relationship loading logic and exclude relationship fields from standard DB operations.
 
 ## [0.5.5] - 2026-03-04
 

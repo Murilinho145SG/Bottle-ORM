@@ -259,6 +259,9 @@ pub struct QueryBuilder<T, E> {
     /// Collection of JOIN clause to filter entry tables
     pub(crate) joins_clauses: Vec<FilterFn>,
 
+    /// Collection of relations to eager load
+    pub(crate) with_relations: Vec<String>,
+
     /// Map of table names to their aliases used in JOINS
     pub(crate) join_aliases: std::collections::HashMap<String, String>,
 
@@ -372,6 +375,7 @@ where
             offset: None,
             with_deleted: false,
             union_clauses: Vec::new(),
+            with_relations: Vec::new(),
             _marker: PhantomData,
         }
     }
@@ -379,6 +383,32 @@ where
     /// Returns the table name or alias if set.
     pub(crate) fn get_table_identifier(&self) -> String {
         self.alias.clone().unwrap_or_else(|| self.table_name.to_snake_case())
+    }
+
+    /// Adds a relation to be eager loaded with the query results.
+    ///
+    /// Eager loading allows you to fetch related models in a single operation
+    /// (typically using a second optimized query) to avoid the N+1 query problem.
+    ///
+    /// # Arguments
+    ///
+    /// * `relation` - The name of the relation to load (must match the field name in the model)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let users = db.model::<User>()
+    ///     .with("posts")
+    ///     .scan()
+    ///     .await?;
+    ///
+    /// for user in users {
+    ///     println!("User {} has {} posts", user.username, user.posts.len());
+    /// }
+    /// ```
+    pub fn with(mut self, relation: &str) -> Self {
+        self.with_relations.push(relation.to_string());
+        self
     }
 
     // ========================================================================
@@ -2757,6 +2787,28 @@ where
             result.push(R::from_any_row(&row)?);
         }
         Ok(result)
+    }
+
+    /// Executes the query and eager loads the requested relationships.
+    ///
+    /// This method is specifically for cases where you want to load relations
+    /// into models. It requires the return type to implement the `Model` trait.
+    pub async fn scan_with(mut self) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: FromAnyRow + AnyImpl + crate::model::Model + Send + Unpin + 'static,
+        E: Clone,
+    {
+        let with_relations = std::mem::take(&mut self.with_relations);
+        let tx = self.tx.clone();
+        let mut results: Vec<T> = self.scan::<T>().await?;
+
+        if !results.is_empty() && !with_relations.is_empty() {
+            for relation in with_relations {
+                T::load_relations(&relation, &mut results, &tx).await?;
+            }
+        }
+
+        Ok(results)
     }
 
     /// Executes the query and maps the result to a custom DTO.

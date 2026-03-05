@@ -140,7 +140,7 @@ pub use database::{Database, DatabaseBuilder, RawQuery};
 ///
 /// The `Model` trait defines the interface for ORM entities, while
 /// `ColumnInfo` contains metadata about individual table columns.
-pub use model::{ColumnInfo, Model};
+pub use model::{ColumnInfo, Model, RelationInfo, RelationType};
 
 /// Re-export of `AnyImpl` and `AnyInfo` for dynamic row mapping.
 ///

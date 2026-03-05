@@ -63,10 +63,12 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     };
 
     // ========================================================================
-    // Generate Column Definitions
+    // Generate Column Definitions & Collect Relations
     // ========================================================================
 
-    let column_defs = fields.named.iter().map(|f| {
+    let mut relations = Vec::new();
+
+    let column_defs_iter = fields.named.iter().filter_map(|f| {
         let field_name = &f.ident;
         let field_type = &f.ty;
 
@@ -85,6 +87,11 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
         let mut is_enum = false;
         let mut foreign_table_tokens = quote! { None };
         let mut foreign_key_tokens = quote! { None };
+
+        let mut rel_type = None;
+        let mut rel_target = None;
+        let mut rel_fk = None;
+        let mut rel_lk = None;
 
         // --------------------------------------------------------------------
         // Parse ORM Attributes
@@ -114,16 +121,36 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                     if meta.path.is_ident("foreign_key") {
                         let value: syn::LitStr = meta.value()?.parse()?;
                         let fk_string = value.value();
-                        let parts: Vec<&str> = fk_string.split("::").collect();
-
-                        if parts.len() == 2 {
-                            let table = parts[0];
-                            let col = parts[1];
-                            foreign_table_tokens = quote! { Some(#table) };
-                            foreign_key_tokens = quote! { Some(#col) };
+                        if fk_string.contains("::") {
+                            let parts: Vec<&str> = fk_string.split("::").collect();
+                            if parts.len() == 2 {
+                                let table = parts[0];
+                                let col = parts[1];
+                                foreign_table_tokens = quote! { Some(#table) };
+                                foreign_key_tokens = quote! { Some(#col) };
+                            }
                         } else {
-                            return Err(meta.error("Invalid format for foreign_key. Use 'Table::column'"));
+                            rel_fk = Some(fk_string);
                         }
+                    }
+                    if meta.path.is_ident("local_key") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_lk = Some(value.value());
+                    }
+                    if meta.path.is_ident("has_many") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_type = Some(quote! { bottle_orm::RelationType::HasMany });
+                        rel_target = Some(value.value());
+                    }
+                    if meta.path.is_ident("has_one") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_type = Some(quote! { bottle_orm::RelationType::HasOne });
+                        rel_target = Some(value.value());
+                    }
+                    if meta.path.is_ident("belongs_to") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_type = Some(quote! { bottle_orm::RelationType::BelongsTo });
+                        rel_target = Some(value.value());
                     }
                     if meta.path.is_ident("omit") {
                         omit = true;
@@ -140,6 +167,30 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
             }
         }
 
+        // If this is a relationship field, don't include it in column_defs
+        if let Some(rtype) = rel_type {
+            let target = rel_target.expect("Target model missing for relation");
+            let fk = rel_fk.unwrap_or_else(|| {
+                 // Default convention: current_model_id for has_many/has_one, target_model_id for belongs_to
+                 // But for simplicity let's require it or use a simple heuristic if we could.
+                 // For now, let's assume "id" or the field name.
+                 "id".to_string()
+            });
+            let lk = rel_lk.unwrap_or_else(|| "id".to_string());
+            let field_name_str = field_name.as_ref().unwrap().to_string();
+
+            relations.push(quote! {
+                bottle_orm::RelationInfo {
+                    name: #field_name_str,
+                    rel_type: #rtype,
+                    target_table: #target,
+                    foreign_key: #fk,
+                    local_key: #lk,
+                }
+            });
+            return None;
+        }
+
         if let Some(s) = size
             && sql_type == "TEXT" {
                 sql_type = format!("VARCHAR({})", s);
@@ -150,7 +201,7 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
             sql_type = "TEXT".to_string();
         }
 
-        quote! {
+        Some(quote! {
             bottle_orm::ColumnInfo {
                  name: stringify!(#field_name),
                  sql_type: #sql_type,
@@ -165,28 +216,230 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                  omit: #omit,
                  soft_delete: #soft_delete,
             }
-        }
+        })
     });
+
+    let column_defs: Vec<_> = column_defs_iter.collect();
+
+    // ========================================================================
+    // Generate load_relations Implementation
+    // ========================================================================
+
+    let load_relations_arms = fields.named.iter().filter_map(|f| {
+        let field_name = &f.ident;
+
+        let mut rel_type = None;
+        let mut rel_target = None;
+        let mut rel_fk = None;
+        let mut rel_lk = None;
+
+        for attr in &f.attrs {
+            if attr.path().is_ident("orm") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("has_many") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_type = Some("HasMany");
+                        rel_target = Some(value.value());
+                    } else if meta.path.is_ident("has_one") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_type = Some("HasOne");
+                        rel_target = Some(value.value());
+                    } else if meta.path.is_ident("belongs_to") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_type = Some("BelongsTo");
+                        rel_target = Some(value.value());
+                    }
+                    
+                    if meta.path.is_ident("foreign_key") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        let s = value.value();
+                        if !s.contains("::") { rel_fk = Some(s); }
+                    }
+                    if meta.path.is_ident("local_key") {
+                        let value: syn::LitStr = meta.value()?.parse()?;
+                        rel_lk = Some(value.value());
+                    }
+                    Ok(())
+                });
+            }
+        }
+
+        if let Some(rtype) = rel_type {
+            let target_ident = format_ident!("{}", rel_target.unwrap());
+            let target_table_name = target_ident.to_string().to_snake_case();
+            let fk = rel_fk.unwrap_or_else(|| "id".to_string());
+            let lk = rel_lk.unwrap_or_else(|| "id".to_string());
+            let lk_ident = format_ident!("{}", lk);
+            let fk_ident = format_ident!("{}", fk);
+            let fk_str = fk.to_snake_case();
+            let field_name_str = field_name.as_ref().unwrap().to_string();
+
+            if rtype == "HasMany" {
+                return Some(quote! {
+                    #field_name_str => {
+                        use sqlx::Arguments;
+                        let ids: Vec<_> = models.iter().map(|m| m.#lk_ident.clone()).collect();
+                        if ids.is_empty() { return Ok(()); }
+                        
+                        let mut query = format!("SELECT * FROM \"{}\" WHERE \"{}\" IN (", #target_table_name, #fk_str);
+                        let mut args = sqlx::any::AnyArguments::default();
+                        let mut placeholders = Vec::new();
+                        for (i, id) in ids.iter().enumerate() {
+                            match tx.driver() {
+                                bottle_orm::database::Drivers::Postgres => {
+                                    placeholders.push(format!("${}", i + 1));
+                                }
+                                _ => {
+                                    placeholders.push("?".to_string());
+                                }
+                            }
+                            let _ = args.add(id.clone());
+                        }
+                        query.push_str(&placeholders.join(", "));
+                        query.push_str(")");
+                        
+                        let rows = tx.fetch_all(&query, args).await?;
+                        let related: Vec<#target_ident> = rows.iter().map(|r| <#target_ident as sqlx::FromRow<sqlx::any::AnyRow>>::from_row(r)).collect::<Result<Vec<_>, _>>()?;
+                        
+                        for model in models.iter_mut() {
+                            model.#field_name = related.iter()
+                                .filter(|r| {
+                                    r.#fk_ident.to_string() == model.#lk_ident.to_string()
+                                })
+                                .cloned()
+                                .collect();
+                        }
+                    }
+                });
+            } else if rtype == "HasOne" {
+                return Some(quote! {
+                    #field_name_str => {
+                        use sqlx::Arguments;
+                        let ids: Vec<_> = models.iter().map(|m| m.#lk_ident.clone()).collect();
+                        if ids.is_empty() { return Ok(()); }
+                        
+                        let mut query = format!("SELECT * FROM \"{}\" WHERE \"{}\" IN (", #target_table_name, #fk_str);
+                        let mut args = sqlx::any::AnyArguments::default();
+                        let mut placeholders = Vec::new();
+                        for (i, id) in ids.iter().enumerate() {
+                            match tx.driver() {
+                                bottle_orm::database::Drivers::Postgres => {
+                                    placeholders.push(format!("${}", i + 1));
+                                }
+                                _ => {
+                                    placeholders.push("?".to_string());
+                                }
+                            }
+                            let _ = args.add(id.clone());
+                        }
+                        query.push_str(&placeholders.join(", "));
+                        query.push_str(")");
+                        
+                        let rows = tx.fetch_all(&query, args).await?;
+                        let related: Vec<#target_ident> = rows.iter().map(|r| <#target_ident as sqlx::FromRow<sqlx::any::AnyRow>>::from_row(r)).collect::<Result<Vec<_>, _>>()?;
+                        
+                        for model in models.iter_mut() {
+                            model.#field_name = related.iter()
+                                .find(|r| r.#fk_ident.to_string() == model.#lk_ident.to_string())
+                                .cloned();
+                        }
+                    }
+                });
+            } else if rtype == "BelongsTo" {
+                 // For BelongsTo, the fk is in the LOCAL model, pointing to target's lk (usually id)
+                 let local_fk_ident = format_ident!("{}", fk);
+                 let target_lk_str = lk.to_snake_case();
+                 let target_lk_ident = format_ident!("{}", lk);
+                 return Some(quote! {
+                    #field_name_str => {
+                        use sqlx::Arguments;
+                        let ids: Vec<_> = models.iter().filter_map(|m| {
+                            let val = m.#local_fk_ident.to_string();
+                            if val == "None" || val.is_empty() { None } else { Some(m.#local_fk_ident.clone()) }
+                        }).collect();
+                        if ids.is_empty() { return Ok(()); }
+                        
+                        let mut query = format!("SELECT * FROM \"{}\" WHERE \"{}\" IN (", #target_table_name, #target_lk_str);
+                        let mut args = sqlx::any::AnyArguments::default();
+                        let mut placeholders = Vec::new();
+                        for (i, id) in ids.iter().enumerate() {
+                            match tx.driver() {
+                                bottle_orm::database::Drivers::Postgres => {
+                                    placeholders.push(format!("${}", i + 1));
+                                }
+                                _ => {
+                                    placeholders.push("?".to_string());
+                                }
+                            }
+                            let _ = args.add(id.clone());
+                        }
+                        query.push_str(&placeholders.join(", "));
+                        query.push_str(")");
+                        
+                        let rows = tx.fetch_all(&query, args).await?;
+                        let related: Vec<#target_ident> = rows.iter().map(|r| <#target_ident as sqlx::FromRow<sqlx::any::AnyRow>>::from_row(r)).collect::<Result<Vec<_>, _>>()?;
+                        
+                        for model in models.iter_mut() {
+                            model.#field_name = related.iter()
+                                .find(|r| r.#target_lk_ident.to_string() == model.#local_fk_ident.to_string())
+                                .cloned();
+                        }
+                    }
+                });
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
 
     // ========================================================================
     // Generate Active Columns List
     // ========================================================================
 
-    let field_names_iter: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
+    let field_names_iter: Vec<_> = fields.named.iter().filter(|f| {
+        // Filter out relationship fields from active columns (database columns)
+        !f.attrs.iter().any(|attr| {
+            if attr.path().is_ident("orm") {
+                let mut is_rel = false;
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("has_many") || meta.path.is_ident("has_one") || meta.path.is_ident("belongs_to") {
+                        is_rel = true;
+                    }
+                    Ok(())
+                });
+                is_rel
+            } else { false }
+        })
+    }).map(|f| &f.ident).collect();
 
     // ========================================================================
     // Generate to_map() Implementation
     // ========================================================================
 
-    let map_inserts = fields.named.iter().map(|f| {
+    let map_inserts = fields.named.iter().filter_map(|f| {
         let field_name = &f.ident;
         let field_type = &f.ty;
+
+        // Skip relationship fields
+        if f.attrs.iter().any(|attr| {
+            if attr.path().is_ident("orm") {
+                let mut is_rel = false;
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("has_many") || meta.path.is_ident("has_one") || meta.path.is_ident("belongs_to") {
+                        is_rel = true;
+                    }
+                    Ok(())
+                });
+                is_rel
+            } else { false }
+        }) {
+            return None;
+        }
 
         let (sql_type, is_nullable) = rust_type_to_sql(field_type);
         let is_complex = sql_type.ends_with("[]") || sql_type == "JSONB" || sql_type == "JSON";
 
         if is_nullable {
-            return quote! {
+            return Some(quote! {
                 map.insert(
                     stringify!(#field_name).to_string(),
                     self.#field_name.as_ref().map(|v| {
@@ -198,23 +451,23 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
                         }
                     })
                 );
-            };
+            });
         }
 
         if is_complex {
-            quote! {
+            Some(quote! {
                 map.insert(
                     stringify!(#field_name).to_string(),
                     Some(serde_json::to_string(&self.#field_name).unwrap_or_else(|_| "".to_string()))
                 );
-            }
+            })
         } else {
-            quote! {
+            Some(quote! {
                 map.insert(
                     stringify!(#field_name).to_string(),
                      Some(self.#field_name.to_string())
                 );
-            }
+            })
         }
     });
 
@@ -222,18 +475,35 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     // Generate AnyInfo Column Definitions
     // ========================================================================
     let table_name_str = struct_name.to_string().to_snake_case();
-    let any_column_defs = fields.named.iter().map(|f| {
+    let any_column_defs = fields.named.iter().filter_map(|f| {
         let field_name = &f.ident;
         let field_type = &f.ty;
+
+        // Skip relationship fields
+        if f.attrs.iter().any(|attr| {
+            if attr.path().is_ident("orm") {
+                let mut is_rel = false;
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("has_many") || meta.path.is_ident("has_one") || meta.path.is_ident("belongs_to") {
+                        is_rel = true;
+                    }
+                    Ok(())
+                });
+                is_rel
+            } else { false }
+        }) {
+            return None;
+        }
+
         let (sql_type, _) = rust_type_to_sql(field_type);
 
-        quote! {
+        Some(quote! {
             bottle_orm::AnyInfo {
                 column: stringify!(#field_name),
                 sql_type: #sql_type,
                 table: #table_name_str,
             }
-        }
+        })
     });
 
     // ========================================================================
@@ -242,6 +512,28 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     let from_row_logic = fields.named.iter().map(|f| {
         let field_name = &f.ident;
         let field_type = &f.ty;
+
+        let mut is_rel = false;
+        let mut rel_type = None;
+        for attr in &f.attrs {
+            if attr.path().is_ident("orm") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("has_many") { is_rel = true; rel_type = Some("HasMany"); }
+                    else if meta.path.is_ident("has_one") { is_rel = true; rel_type = Some("HasOne"); }
+                    else if meta.path.is_ident("belongs_to") { is_rel = true; rel_type = Some("BelongsTo"); }
+                    Ok(())
+                });
+            }
+        }
+
+        if is_rel {
+            if rel_type == Some("HasMany") {
+                return quote! { let #field_name: #field_type = Vec::new(); };
+            } else {
+                return quote! { let #field_name: #field_type = None; };
+            }
+        }
+
         let column_name = field_name.as_ref().unwrap().to_string();
         let alias_name = format!("{}__{}", table_name_str, column_name);
 
@@ -355,6 +647,28 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     let from_row_logic_positional = fields.named.iter().map(|f| {
         let field_name = &f.ident;
         let field_type = &f.ty;
+
+        let mut is_rel = false;
+        let mut rel_type = None;
+        for attr in &f.attrs {
+            if attr.path().is_ident("orm") {
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("has_many") { is_rel = true; rel_type = Some("HasMany"); }
+                    else if meta.path.is_ident("has_one") { is_rel = true; rel_type = Some("HasOne"); }
+                    else if meta.path.is_ident("belongs_to") { is_rel = true; rel_type = Some("BelongsTo"); }
+                    Ok(())
+                });
+            }
+        }
+
+        if is_rel {
+            if rel_type == Some("HasMany") {
+                return quote! { let #field_name: #field_type = Vec::new(); };
+            } else {
+                return quote! { let #field_name: #field_type = None; };
+            }
+        }
+
         let (sql_type, is_nullable) = rust_type_to_sql(field_type);
         
         let mut is_enum = false;
@@ -450,13 +764,16 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
     // ========================================================================
 
     let module_name = format_ident!("{}_fields", struct_name.to_string().to_snake_case());
-    let field_constants = fields.named.iter().map(|f| {
+    let field_constants = fields.named.iter().filter_map(|f| {
         let field_name = &f.ident;
+
+        // Skip relationship fields in field constants for queries (unless used in with)
+        // Actually, we might want them for .with(user_fields::POSTS)
         let const_name = format_ident!("{}", field_name.as_ref().unwrap().to_string().to_uppercase());
         let name_str = field_name.as_ref().unwrap().to_string();
-        quote! {
+        Some(quote! {
             pub const #const_name: &'static str = #name_str;
-        }
+        })
     });
 
     // ========================================================================
@@ -493,6 +810,26 @@ pub fn expand(ast: DeriveInput) -> TokenStream {
 
             fn active_columns() -> Vec<&'static str> {
                 vec![#(stringify!(#field_names_iter) ),*]
+            }
+
+            fn relations() -> Vec<bottle_orm::RelationInfo> {
+                vec![#(#relations),*]
+            }
+
+            fn load_relations<'a>(
+                relation_name: &'a str,
+                models: &'a mut [Self],
+                tx: &'a dyn bottle_orm::database::Connection,
+            ) -> futures::future::BoxFuture<'a, Result<(), sqlx::Error>> {
+                Box::pin(async move {
+                    if relation_name.is_empty() { return Ok(()); }
+                    match relation_name {
+                        #(#load_relations_arms),*
+                        _ => return Err(sqlx::Error::Configuration(format!("Relation '{}' not found in model '{}'", relation_name, #table_name_str).into())),
+                    }
+                    #[allow(unreachable_code)]
+                    Ok(())
+                })
             }
 
             fn to_map(&self) -> std::collections::HashMap<String, Option<String>> {
