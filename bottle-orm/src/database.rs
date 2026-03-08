@@ -99,6 +99,12 @@ impl Database {
     pub fn raw<'a>(&self, sql: &'a str) -> RawQuery<'a, Self> {
         RawQuery::new(self.clone(), sql)
     }
+    
+    /// This function should have been here a long time ago.
+    /// Retrieve the connection pool.
+    pub fn get_pool(&self) -> AnyPool {
+    	self.pool.clone()
+    }
 
     /// Starts a new database transaction.
     pub async fn begin(&self) -> Result<crate::transaction::Transaction<'_>, Error> {
