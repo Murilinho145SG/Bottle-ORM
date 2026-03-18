@@ -568,7 +568,7 @@ where
         
         // For SQLite, reset auto-increment if exists
         if matches!(self.driver, Drivers::SQLite) {
-            let _ = self.tx.execute(&format!("DELETE FROM sqlite_sequence WHERE name='{}'", table_name), AnyArguments::default()).await;
+            let _ = self.tx.execute(&format!("DELETE FROM sqlite_sequence WHERE name=\"{}\"", table_name), AnyArguments::default()).await;
         }
 
         Ok(())
@@ -2733,7 +2733,7 @@ where
             for (f_idx, s) in flat_selects.iter().enumerate() {
                 let s_trim = s.trim();
                 if s_trim == "*" || s_trim.ends_with(".*") {
-                    let mut t_exp = if s_trim == "*" { String::new() } else { s_trim.strip_suffix(".*").unwrap().trim().trim_matches('"').to_string() };
+                    let mut t_exp = if s_trim == "*" { String::new() } else { s_trim.strip_suffix(".*").unwrap_or(s_trim).trim().trim_matches('"').to_string() };
                     if !t_exp.is_empty() && (t_exp.to_snake_case() == main_table_snake || t_exp == table_id) { t_exp = table_id.clone(); }
                     for (s_idx, col_info) in struct_cols.iter().enumerate() {
                         if matched_s_indices.contains(&s_idx) { continue; }

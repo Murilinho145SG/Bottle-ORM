@@ -93,7 +93,7 @@ impl Pagination {
     pub fn new_with_limit(page: usize, limit: usize, max_limit: usize) -> Self {
         let mut f_limit = limit;
         if f_limit > max_limit {
-            f_limit = 10;
+            f_limit = max_limit;
         }
         Self { page, limit: f_limit, max_limit }
     }
@@ -128,7 +128,7 @@ impl Pagination {
     {
         // Enforce max_limit again during application to ensure safety
         if self.limit > self.max_limit {
-        	self.limit = 10;
+            self.limit = self.max_limit;
         }
 
         query.limit(self.limit).offset(self.page * self.limit)

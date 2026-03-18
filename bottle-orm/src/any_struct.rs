@@ -123,9 +123,8 @@ macro_rules! impl_cast_primitive {
 
             impl FromAnyRow for $t {
                 fn from_any_row(row: &AnyRow) -> Result<Self, Error> {
-                    // Try to get as i64 and cast
                     let val: i64 = row.try_get(0).map_err(|e| Error::Decode(Box::new(e)))?;
-                    Ok(val as $t)
+                    <$t>::try_from(val).map_err(|e| Error::Decode(Box::new(e)))
                 }
 
                 fn from_any_row_at(row: &AnyRow, index: &mut usize) -> Result<Self, Error> {
@@ -135,7 +134,7 @@ macro_rules! impl_cast_primitive {
                     let res = row.try_get::<i64, _>(*index);
                     *index += 1;
                     let val = res.map_err(|e| Error::Decode(Box::new(e)))?;
-                    Ok(val as $t)
+                    <$t>::try_from(val).map_err(|e| Error::Decode(Box::new(e)))
                 }
             }
         )*

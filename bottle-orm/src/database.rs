@@ -464,7 +464,7 @@ impl<'a, C> RawQuery<'a, C> where C: Connection {
     /// ```
     pub async fn fetch_all<T>(self) -> Result<Vec<T>, Error> where T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin {
         let rows = self.conn.fetch_all(self.sql, self.args).await?;
-        Ok(rows.iter().map(|r| T::from_row(r).unwrap()).collect())
+        Ok(rows.iter().map(|r| T::from_row(r)).collect::<Result<Vec<_>, _>>()?)
     }
 
     /// Executes the query and returns exactly one row.
@@ -500,7 +500,7 @@ impl<'a, C> RawQuery<'a, C> where C: Connection {
     /// ```
     pub async fn fetch_optional<T>(self) -> Result<Option<T>, Error> where T: for<'r> sqlx::FromRow<'r, sqlx::any::AnyRow> + Send + Unpin {
         let row = self.conn.fetch_optional(self.sql, self.args).await?;
-        Ok(row.map(|r| T::from_row(&r).unwrap()))
+        Ok(row.map(|r| T::from_row(&r)).transpose()?)
     }
 
     /// Executes the query and returns the number of affected rows.

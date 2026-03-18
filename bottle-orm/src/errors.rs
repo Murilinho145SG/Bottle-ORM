@@ -106,7 +106,7 @@ pub enum Error {
     ///     Ok(())
     /// }
     /// ```
-    #[error("Invalid Data {0}: {0}")]
+    #[error("Invalid Data: {0}")]
     InvalidData(String),
 
     /// Type conversion error.
@@ -209,7 +209,7 @@ pub enum Error {
     ///     }
     /// }
     /// ```
-    #[error("Invalid argument {0}: {0}")]
+    #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 }
 
