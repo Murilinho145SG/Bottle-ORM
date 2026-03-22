@@ -2294,7 +2294,14 @@ where
                         let _ = args.add(val_str);
                     }
                 } else {
-                    let _ = args.add(None::<String>);
+                    match sql_type {
+                        "INTEGER" | "INT" | "INT4" | "SERIAL" => { let _ = args.add(None::<i32>); }
+                        "BIGINT" | "INT8" | "BIGSERIAL" => { let _ = args.add(None::<i64>); }
+                        "REAL" | "FLOAT4" => { let _ = args.add(None::<f32>); }
+                        "DOUBLE PRECISION" | "FLOAT8" | "FLOAT" => { let _ = args.add(None::<f64>); }
+                        "BOOLEAN" | "BOOL" => { let _ = args.add(None::<bool>); }
+                        _ => { let _ = args.add(None::<String>); }
+                    }
                 }
             }
 
@@ -2407,7 +2414,14 @@ where
                         }
                     } else {
                         // Bind NULL for missing or None values
-                        let _ = args.add(None::<String>);
+                        match sql_type {
+                            "INTEGER" | "INT" | "INT4" | "SERIAL" => { let _ = args.add(None::<i32>); }
+                            "BIGINT" | "INT8" | "BIGSERIAL" => { let _ = args.add(None::<i64>); }
+                            "REAL" | "FLOAT4" => { let _ = args.add(None::<f32>); }
+                            "DOUBLE PRECISION" | "FLOAT8" | "FLOAT" => { let _ = args.add(None::<f64>); }
+                            "BOOLEAN" | "BOOL" => { let _ = args.add(None::<bool>); }
+                            _ => { let _ = args.add(None::<String>); }
+                        }
                     }
                 }
             }
@@ -2581,7 +2595,14 @@ where
                         let _ = args.add(val_str);
                     }
                 } else {
-                    let _ = args.add(None::<String>);
+                    match sql_type {
+                        "INTEGER" | "INT" | "INT4" | "SERIAL" => { let _ = args.add(None::<i32>); }
+                        "BIGINT" | "INT8" | "BIGSERIAL" => { let _ = args.add(None::<i64>); }
+                        "REAL" | "FLOAT4" => { let _ = args.add(None::<f32>); }
+                        "DOUBLE PRECISION" | "FLOAT8" | "FLOAT" => { let _ = args.add(None::<f64>); }
+                        "BOOLEAN" | "BOOL" => { let _ = args.add(None::<bool>); }
+                        _ => { let _ = args.add(None::<String>); }
+                    }
                 }
             }
 
@@ -3311,7 +3332,14 @@ where
                         let _ = args.add(val_str);
                     }
                 } else {
-                    let _ = args.add(None::<String>);
+                    match sql_type {
+                        "INTEGER" | "INT" | "INT4" | "SERIAL" => { let _ = args.add(None::<i32>); }
+                        "BIGINT" | "INT8" | "BIGSERIAL" => { let _ = args.add(None::<i64>); }
+                        "REAL" | "FLOAT4" => { let _ = args.add(None::<f32>); }
+                        "DOUBLE PRECISION" | "FLOAT8" | "FLOAT" => { let _ = args.add(None::<f64>); }
+                        "BOOLEAN" | "BOOL" => { let _ = args.add(None::<bool>); }
+                        _ => { let _ = args.add(None::<String>); }
+                    }
                 }
             }
 

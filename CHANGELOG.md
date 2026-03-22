@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] - 2026-03-22
+
+### Fixed
+- **Typed NULL bindings**: `insert`, `batch_insert`, `upsert`, and bulk `update` now bind `None` values using the correct Rust type derived from the column's `sql_type` metadata. Previously, all `None` values were bound as `None::<String>`, causing PostgreSQL to reject them with a type-mismatch error (`column "x" is of type integer but expression is of type text`) for non-text optional fields. Integer, bigint, float, double, and boolean columns now receive a properly-typed NULL that PostgreSQL accepts without coercion.
+
 ## [0.5.8] - 2026-03-07
 
 ### Added
